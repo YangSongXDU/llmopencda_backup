@@ -83,9 +83,26 @@ class EvaluationManager(object):
                 route_dist += prev.location.distance(cur.location)
         return route_dist
 
+
+
+
     @staticmethod
     def plot_3d(timestamp, acc_x_axis, acc_y_axis, acc_z_axis, acc_magnitude,
-                gyro_x_axis, gyro_y_axis, gyro_z_axis, gyro_magnitude):
+                    gyro_x_axis, gyro_y_axis, gyro_z_axis, gyro_magnitude):
+            
+        # --- 暴力对齐：获取所有数组中的最小长度，并将所有数组强制截断截齐 ---
+        min_len = min(len(timestamp), len(acc_x_axis), len(acc_magnitude), len(gyro_x_axis))
+        timestamp = timestamp[:min_len]
+        acc_x_axis = acc_x_axis[:min_len]
+        acc_y_axis = acc_y_axis[:min_len]
+        acc_z_axis = acc_z_axis[:min_len]
+        acc_magnitude = acc_magnitude[:min_len]
+        gyro_x_axis = gyro_x_axis[:min_len]
+        gyro_y_axis = gyro_y_axis[:min_len]
+        gyro_z_axis = gyro_z_axis[:min_len]
+        gyro_magnitude = gyro_magnitude[:min_len]
+        # ------------------------------------------------------------------
+
         fig, axes = plt.subplots(nrows=2, ncols=4)
         ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8 = axes.flatten()
         ax1.plot(timestamp, acc_x_axis, label='Accelerometer X axis')
@@ -117,6 +134,48 @@ class EvaluationManager(object):
         fig.suptitle('Plots with Accelerometer and Gyroscope')
         plt.subplots_adjust(wspace=0.5)
         plt.show(block=False)
+    # @staticmethod
+    # def plot_3d(timestamp, acc_x_axis, acc_y_axis, acc_z_axis, acc_magnitude,
+    #             gyro_x_axis, gyro_y_axis, gyro_z_axis, gyro_magnitude):
+        
+    #     # --- 增加以下 5 行代码来对齐数据长度 ---
+    #     min_len = min(len(timestamp), len(acc_x_axis))
+    #     timestamp = timestamp[:min_len]
+    #     acc_x_axis = acc_x_axis[:min_len]
+    #     acc_y_axis = acc_y_axis[:min_len]
+    #     acc_z_axis = acc_z_axis[:min_len]
+    #     # --------------------------------------
+    #     fig, axes = plt.subplots(nrows=2, ncols=4)
+    #     ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8 = axes.flatten()
+    #     ax1.plot(timestamp, acc_x_axis, label='Accelerometer X axis')
+    #     ax2.plot(timestamp, acc_y_axis, label='Accelerometer Y axis')
+    #     ax3.plot(timestamp, acc_z_axis, label='Accelerometer Z axis')
+    #     ax4.plot(timestamp, acc_magnitude, label='Accelerometer Magnitude')
+    #     ax5.plot(timestamp, gyro_x_axis, 'r', label='Gyroscope X axis')
+    #     ax6.plot(timestamp, gyro_y_axis, 'r', label='Gyroscope Y axis')
+    #     ax7.plot(timestamp, gyro_z_axis, 'r', label='Gyroscope Z axis')
+    #     ax8.plot(timestamp, gyro_magnitude, 'r', label='Gyroscope Magnitude')
+    #     ax1.set_xlabel('timestamp')
+    #     ax1.set_ylabel('x')
+    #     ax2.set_xlabel('timestamp')
+    #     ax2.set_ylabel('y')
+    #     ax3.set_xlabel('timestamp')
+    #     ax3.set_ylabel('z')
+    #     ax4.set_xlabel('timestamp')
+    #     ax4.set_ylabel('Accelerometer Signed Forward Magnitude')
+    #     ax5.set_xlabel('timestamp')
+    #     ax5.set_ylabel('x')
+    #     ax6.set_xlabel('timestamp')
+    #     ax6.set_ylabel('y')
+    #     ax7.set_xlabel('timestamp')
+    #     ax7.set_ylabel('z')
+    #     ax8.set_xlabel('timestamp')
+    #     ax8.set_ylabel('Gyroscope Magnitude')
+    #     for axis in axes.flatten():
+    #         axis.legend()
+    #     fig.suptitle('Plots with Accelerometer and Gyroscope')
+    #     plt.subplots_adjust(wspace=0.5)
+    #     plt.show(block=False)
 
     @staticmethod
     def plot_2d(x_axis, y_axis, x_label, y_label, legend_name, title_name):

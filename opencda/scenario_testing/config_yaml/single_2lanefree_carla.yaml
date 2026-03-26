@@ -7,15 +7,18 @@ description: |-
 # define the carla traffic
 carla_traffic_manager:
   vehicle_list:
-    - spawn_position: [ -330, 8.3, 0.3, 0, 0, 0 ]
-      vehicle_speed_perc: 0
+    # - spawn_position: [ -330, 8.3, 0.3, 0, 0, 0 ]
+    #   vehicle_speed_perc: 0
     - spawn_position: [ -320, 4.8, 0.3, 0, 0, 0 ]
       vehicle_speed_perc: -200
     - spawn_position: [ -300, 8.3, 0.3, 0, 0, 0 ]
       vehicle_speed_perc: -100
     - spawn_position: [ -280, 4.8, 0.3, 0, 0, 0 ]
       vehicle_speed_perc: -200
-
+    # - spawn_position: [ -250, 4.8, 0.3, 0, 0, 0 ]
+    #   vehicle_speed_perc: -200
+    # - spawn_position: [ -240, 4.8, 0.3, 0, 0, 0 ]
+    #   vehicle_speed_perc: -200
 
 scenario:
   single_cav_list: # this is for merging vehicle or single cav without v2x

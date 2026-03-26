@@ -26,7 +26,7 @@ class MLManager(object):
 
     def __init__(self):
 
-        self.object_detector = torch.hub.load('ultralytics/yolov5', 'yolov5m')
+        self.object_detector = torch.hub.load('ultralytics/yolov5:v6.2', 'yolov5m')
 
     def draw_2d_box(self, result, rgb_image, index):
         """
