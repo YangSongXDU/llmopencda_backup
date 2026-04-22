@@ -14,6 +14,10 @@ import torch
 import numpy as np
 
 
+YOLO_DIR = '/home/songyang/yolov5_v62'
+YOLO_WEIGHT = '/home/songyang/yolov5_v62/yolov5m.pt'
+
+
 class MLManager(object):
     """
     A class that should contain all the ML models you want to initialize.
@@ -26,7 +30,12 @@ class MLManager(object):
 
     def __init__(self):
 
-        self.object_detector = torch.hub.load('ultralytics/yolov5:v6.2', 'yolov5m')
+        self.object_detector = torch.hub.load(
+            YOLO_DIR,
+            'custom',
+            path=YOLO_WEIGHT,
+            source='local'
+        )
 
     def draw_2d_box(self, result, rgb_image, index):
         """

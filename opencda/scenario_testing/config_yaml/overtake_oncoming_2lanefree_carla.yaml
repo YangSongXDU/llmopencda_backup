@@ -1,0 +1,101 @@
+description: |-
+  Scenario for cooperative overtaking with an oncoming vehicle on 2lane_freeway.
+  ego_cav is on the right lane and wants to overtake a slow lead_npc.
+  oncoming_cav is created normally first, then rotated to wrong-way direction in the scenario script.
+  Compare local-only baseline vs V2V-assisted cooperative control.
+
+vehicle_base:
+  sensing:
+    perception:
+      activate: false
+      camera:
+        visualize: 0
+        num: 1
+        positions:
+          - [2.5, 0.0, 1.0, 0]
+      lidar:
+        visualize: false
+
+  map_manager:
+    visualize: false
+    activate: false
+
+  behavior:
+    max_speed: 65
+    tailgate_speed: 80
+    overtake_allowed: true
+    local_planner:
+      debug_trajectory: false
+      debug: false
+
+carla_traffic_manager:
+  sync_mode: true
+  global_distance: 8.0
+  set_osm_mode: false
+  global_speed_perc: 0
+  auto_lane_change: false
+  random: false
+  vehicle_list:
+    # lead slow vehicle in front of ego
+    - spawn_position: [-350, 4.8, 0.3, 0, 0, 0]
+      vehicle_speed_perc: 75
+
+scenario:
+  max_steps: 5000
+
+  single_cav_list:
+    - name: ego_cav
+      spawn_position: [-375, 4.8, 0.3, 0, 0, 0]
+      destination: [700, 4.8, 0.3]
+      v2x:
+        communication_range: 180
+      behavior:
+        max_speed: 70
+        tailgate_speed: 90
+        overtake_allowed: true
+        local_planner:
+          debug_trajectory: true
+          debug: false
+      cooperative_overtake:
+        # false -> local-only baseline
+        # true  -> use current V2X state sharing
+        use_v2v: true
+
+        # local perception only trusts oncoming vehicles inside this range
+        local_oncoming_detection_range: 45.0
+
+        # if V2V is enabled, oncoming CAV can be "seen" farther away
+        v2v_oncoming_detection_range: 180.0
+
+        # heading difference threshold to classify a vehicle as oncoming
+        oncoming_yaw_threshold: 120.0
+
+        # conservative overtaking timing model
+        lane_change_time: 1.4
+        extra_pass_distance: 18.0
+        oncoming_time_margin: 2.8
+        min_relative_speed: 2.0
+        return_distance_buffer: 12.0
+
+        # robust stop control
+        min_run_steps: 500
+        goal_tolerance: 10.0
+
+    - name: oncoming_cav
+      # IMPORTANT:
+      # keep yaw=0 here, so default OpenCDA creation succeeds.
+      # The scenario script will rotate it to yaw=180 after creation.
+      spawn_position: [-235, 8.3, 0.3, 0, 0, 0]
+      destination: [300, 8.3, 0.3]
+      v2x:
+        communication_range: 180
+      behavior:
+        max_speed: 60
+        tailgate_speed: 60
+        overtake_allowed: false
+        local_planner:
+          debug_trajectory: false
+          debug: false
+      wrong_way:
+        target_speed: 60
+        look_ahead: 8.0

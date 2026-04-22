@@ -1,0 +1,198 @@
+description: |-
+  借道超车实验场景（重构版）：
+  1) ego_cav：右车道主车，执行跟车 / 评估 / 左切 / 左侧通过 / 回右
+  2) lead_cav：右车道慢车，稳定匀速前进，提供超车对象
+  3) oncoming_cav：左车道对向来车，逆向匀速行驶，提供会车约束
+
+vehicle_base:
+  sensing:
+    perception:
+      activate: false            # 是否启用感知模块；这里关闭，避免引入额外感知算法干扰实验
+      camera:
+        visualize: 0             # 是否显示相机画面；0 表示不显示
+        num: 1                   # 相机数量；这里只放 1 个占位
+        positions:
+          - [2.5, 0.0, 1.0, 0]   # 相机相对车体安装位置：[x, y, z, yaw]
+      lidar:
+        visualize: false         # 是否显示激光雷达点云；这里关闭
+
+  map_manager:
+    visualize: false             # 是否显示地图管理器调试可视化；关闭
+    activate: false              # 是否启用地图管理模块的可视化逻辑；关闭
+
+  behavior:
+    max_speed: 55                # 基础行为最大速度（km/h）
+    tailgate_speed: 65           # 较激进工况下允许的上限速度（km/h）
+    overtake_allowed: true       # 是否允许超车；对 ego 来说为 true
+    local_planner:
+      debug_trajectory: true     # 是否显示本地规划轨迹调试信息
+      debug: true                # 是否打印调试信息；建议先开着，便于观察状态机
+
+scenario:
+  max_steps: 5000                # 场景最多运行多少个 tick，防止死循环
+
+  single_cav_list:
+    - name: ego_cav              # 主车：执行借道超车逻辑
+      spawn_position: [-375, 4.8, 0.3, 0, 0, 0]   # 生成位置：[x, y, z, roll, yaw, pitch]
+      destination: [20, 4.8, 0.3]                 # 终点位置；这里给得较近，便于在实验后正常结束
+
+      v2x:
+        enabled: true            # 是否启用 V2X / V2V
+        communication_range: 250 # 通信范围（米）；决定多远内的 CAV 能作为 V2V 邻居
+
+      behavior:
+        max_speed: 55            # ego 最大速度（km/h）
+        tailgate_speed: 65       # ego 激进速度上限（km/h）
+        overtake_allowed: true   # ego 允许超车
+        local_planner:
+          debug_trajectory: true # 打开轨迹调试
+          debug: true            # 打印调试信息，例如 EVALUATE 日志
+
+      experiment_agent:
+        # =========================
+        # 基础开关
+        # =========================
+        use_v2v: True           # 是否使用 V2V 信息参与对向来车判断；你当前想关掉 V2V 做对比，这里保持 false
+
+        # =========================
+        # 对向车检测范围
+        # =========================
+        local_oncoming_detection_range: 80.0   # 仅依赖本地感知时，最远考虑多远的对向车（米）
+        v2v_oncoming_detection_range: 250.0    # 依赖 V2V 时，最远考虑多远的对向车（米）
+        oncoming_yaw_threshold: 120.0          # 若对方朝向与 ego 差值大于该角度，则认为是对向来车
+
+        # =========================
+        # 正常跟车 / 巡航参数
+        # =========================
+        follow_speed_margin: 2.0   # 跟车时允许略高于前车的速度裕量（km/h）
+        follow_min_speed: 6.0      # 跟车阶段最低速度（km/h）
+        cruise_speed: 35.0         # 正常巡航速度（km/h）
+
+        # =========================
+        # 目标点前瞻距离
+        # =========================
+        look_ahead_current: 10.0   # 右车道正常行驶时，目标点前瞻距离（米）
+        look_ahead_left: 18.0      # 左车道切入/通过时，目标点前瞻距离（米）
+        look_ahead_return: 14.0    # 回右车道时，目标点前瞻距离（米）
+
+        # =========================
+        # 跟车安全距离
+        # =========================
+        overtake_trigger_distance: 30.0  # 当与前车距离小于该值时，开始进入 EVALUATE（米）
+        emergency_stop_distance: 4.0     # 与前车距离过小时，直接停车（米）
+        hard_brake_distance: 8.0         # 与前车距离较近时，强制低速（米）
+        soft_follow_distance: 14.0       # 与前车距离较近时，使用更保守跟车速度（米）
+
+        # =========================
+        # 这张 2lane_freeway_simplified 地图的车道中心参数
+        # =========================
+        right_lane_center_y: 4.8    # 右车道中心 y 值
+        left_lane_center_y: 8.3     # 左车道中心 y 值
+        lane_y_tolerance: 1.5       # 判断“是否还在某车道”时允许的 y 方向容差（米）
+
+        # =========================
+        # 分阶段速度参数
+        # =========================
+        change_left_entry_speed: 18.0  # CHANGE_LEFT 阶段的速度：先低速切入左车道
+        pass_left_speed: 45.0          # PASS_LEFT 阶段的速度：真正超过前车时的速度
+        return_right_speed: 30.0       # RETURN_RIGHT 阶段的速度：回归右车道时较保守
+        abort_right_speed: 18.0        # ABORT_RIGHT 阶段的速度：放弃超车时更保守地回右
+
+        # =========================
+        # 领先前车后才允许回右的条件
+        # =========================
+        return_headway_buffer: 18.0    # ego 必须比前车至少多领先这么多，才允许考虑回右（米）
+        left_lane_reached_tol: 0.5     # 认为“已经真正切入左车道”的 y 容差（米）
+
+        # =========================
+        # ===== CHANGE 1 =====
+        # 更保守的超车时间估计参数
+        # 用于修正之前 t_pass 估计过于乐观的问题
+        # =========================
+        lane_change_time: 1.8          # 估计一次变道所需时间（秒），改大一些更保守
+        extra_pass_distance: 18.0      # 通过前车后额外要求留出的净距（米）
+        oncoming_time_margin: 2.5      # 评估时额外附加的对向车安全时间裕量（秒）
+        min_relative_speed: 2.0        # 估计相对速度时的最小下限
+        left_settle_time: 1.0          # 左切完成后，车身稳定到左车道中心所需附加时间（秒）
+        right_settle_time: 1.0         # 准备回右/回右后稳定车身所需附加时间（秒）
+        pass_prepare_time: 0.8         # 左切完成后，真正开始通过前车前的准备时间（秒）
+
+        # =========================
+        # ===== CHANGE 2 =====
+        # 回右前增加“对向车安全门槛”
+        # 不能只因为超过前车就立刻回右
+        # =========================
+        return_oncoming_min_distance: 28.0  # 回右时，对向车最少还要离这么远（米）
+        return_oncoming_time_margin: 2.5    # 回右时，对向车时间裕量至少这么大（秒）
+
+        # =========================
+        # ===== CHANGE 3 =====
+        # 在 CHANGE_LEFT / PASS_LEFT 阶段持续重算风险
+        # 一旦发现对向车逼近，就放弃超车或更保守处理
+        # =========================
+        abort_change_left_min_distance: 22.0  # 左切阶段若对向车距离小于该值，则放弃超车（米）
+        abort_change_left_time_margin: 2.0    # 左切阶段若对向车时间裕量小于该值，则放弃超车（秒）
+        abort_pass_left_time_margin: 1.5      # 左侧通过阶段若对向车时间裕量过小，则进入放弃/保守处理（秒）
+
+        # =========================
+        # 其他
+        # =========================
+        min_run_steps: 200           # 场景至少运行多少步后，才允许以“到达目标区域”作为正常结束条件
+
+        # =========================
+        # LLM 配置（注意：必须放在 experiment_agent 里面）
+        # =========================
+        llm:
+          enabled: true                              # 是否启用 llm_service
+          endpoint: "http://127.0.0.1:8712/reason/overtake"   # llm_service 接口地址
+          timeout: 10                               # OpenCDA 侧等待 llm_service 响应的超时时间（秒）
+          cooldown_steps: 8                          # 每隔多少个仿真 step 才重新请求一次，避免每 tick 都调 LLM
+          min_confidence: 0.55                       # 若 LLM 返回 confidence 小于该值，则回退到规则法
+          use_in_evaluate: true                      # 是否在 EVALUATE 阶段调用 LLM
+          use_in_change_left: true                   # 是否在 CHANGE_LEFT 阶段调用 LLM
+          use_in_pass_left: true                     # 是否在 PASS_LEFT 阶段调用 LLM
+          use_in_return_right: false                 # 是否在 RETURN_RIGHT 阶段调用 LLM，一般先关闭
+
+    - name: lead_cav                # 前车：右车道慢车
+      spawn_position: [-340, 4.8, 0.3, 0, 0, 0]  # 比 ego 更靠前一些
+      destination: [100, 4.8, 0.3]               # 与 ego 同方向终点，用于保持场景一致性
+
+      v2x:
+        enabled: true              # 也作为 CAV 节点参与 V2V
+        communication_range: 250   # 通信范围
+
+      behavior:
+        max_speed: 10              # 前车最大速度，设低一点，保证 ego 有超车动机
+        tailgate_speed: 10         # 对它来说没什么实际意义，但保持一致
+        overtake_allowed: false    # 前车不允许超车
+        local_planner:
+          debug_trajectory: false  # 前车不需要开轨迹调试
+          debug: false             # 前车不需要打印调试
+
+      lead_agent:
+        target_speed: 8.0          # SameLaneConstantAgent 使用的匀速值（km/h）
+        look_ahead: 8.0            # 前车前瞻距离（米）
+
+    - name: oncoming_cav           # 对向来车：左车道逆向行驶
+      # 注意：
+      # 这里 spawn_position 的 yaw 先保持 0，
+      # 让 OpenCDA 默认创建流程顺利完成；
+      # 随后在场景脚本中会用 set_transform(yaw=180) 把它强行转成逆向朝向。
+      spawn_position: [-210, 8.3, 0.3, 0, 0, 0]  # 放在左车道，并位于前方较近位置，用于形成会车约束
+      destination: [100, 8.3, 0.3]               # 这里只是占位/兼容参数，真正逆向跑由脚本 + WrongWayConstantAgent 控制
+
+      v2x:
+        enabled: true              # 对向来车也参与 V2V 广播
+        communication_range: 250   # 通信范围
+
+      behavior:
+        max_speed: 15              # 对向车速度上限（km/h）
+        tailgate_speed: 15         # 保持一致
+        overtake_allowed: false    # 不允许超车
+        local_planner:
+          debug_trajectory: false  # 不需要轨迹调试
+          debug: false             # 不需要打印调试
+
+      wrong_way:
+        target_speed: 15.0         # WrongWayConstantAgent 使用的逆向匀速值（km/h）
+        look_ahead: 8.0            # 逆向沿 previous() 跟踪 waypoint 的前瞻距离
