@@ -1,0 +1,82 @@
+description: |-
+  Single CAV demo for LLM Agent driven sensor-as-tools selection.
+  The LLM Agent calls CameraTool, LiDARTool and FusionTool summaries
+  instead of using CARLA server vehicle positions as control input.
+
+carla_traffic_manager:
+  vehicle_list:
+    - spawn_position: [ -300, 8.3, 0.3, 0, 0, 0 ]
+      vehicle_speed_perc: 20
+    - spawn_position: [ -260, 4.8, 0.3, 0, 0, 0 ]
+      vehicle_speed_perc: -50
+
+scenario:
+  max_steps: 1000
+
+  single_cav_list:
+    - name: cav1
+      spawn_position: [ -370, 8.3, 0.3, 0, 0, 0 ]
+      destination: [ 700, 8.3, 0.3 ]
+
+      sensing:
+        perception:
+          # Keep activate false to avoid mandatory ML model loading.
+          # Camera/LiDAR sensors are still spawned by visualize settings below.
+          activate: false
+          camera:
+            visualize: 1
+            num: 1
+            positions:
+              - [2.5, 0, 1.0, 0]
+          lidar:
+            visualize: true
+            range: 60
+            channels: 32
+            points_per_second: 100000
+            rotation_frequency: 20
+            upper_fov: 10.0
+            lower_fov: -30.0
+            dropoff_general_rate: 0.0
+            dropoff_intensity_limit: 1.0
+            dropoff_zero_intensity: 0.0
+            noise_stddev: 0.0
+
+      behavior:
+        use_llm_tool_agent: true
+        local_planner:
+          debug_trajectory: true
+          debug: true
+
+        llm_sensor_agent:
+          enabled: true
+          debug: true
+          llm_call_interval: 20
+
+          risk_threshold:
+            medium_distance: 60.0
+            high_distance: 30.0
+            critical_distance: 12.0
+
+          tool_cost:
+            ego_state_tool: 0.1
+            camera_tool: 1.0
+            lidar_tool: 2.0
+            fusion_tool: 3.0
+
+          lidar_tool:
+            enabled: true
+            front_x_min: 2.0
+            front_x_max: 60.0
+            lane_y_abs: 2.0
+            z_min: -2.0
+            z_max: 3.0
+            min_points: 5
+
+          camera_tool:
+            enabled: true
+
+          fusion_tool:
+            enabled: true
+
+      v2x:
+        communication_range: 45
