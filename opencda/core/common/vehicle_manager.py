@@ -20,6 +20,8 @@ from opencda.core.sensing.perception.perception_manager \
 from opencda.core.safety.safety_manager import SafetyManager
 from opencda.core.plan.behavior_agent \
     import BehaviorAgent
+from opencda.customize.core.plan.llm_tool_behavior_agent \
+    import LLMToolBehaviorAgent
 from opencda.core.map.map_manager import MapManager
 from opencda.core.common.data_dumper import DataDumper
 
@@ -124,7 +126,12 @@ class VehicleManager(object):
                 platoon_config,
                 carla_map)
         else:
-            self.agent = BehaviorAgent(vehicle, carla_map, behavior_config)
+            if behavior_config.get('use_llm_tool_agent', False):
+                self.agent = LLMToolBehaviorAgent(
+                    vehicle, carla_map, behavior_config)
+                self.agent.set_vehicle_manager(self)
+            else:
+                self.agent = BehaviorAgent(vehicle, carla_map, behavior_config)
 
         # Control module
         self.controller = ControlManager(control_config)
