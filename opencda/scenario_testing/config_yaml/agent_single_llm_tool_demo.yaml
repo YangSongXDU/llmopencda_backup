@@ -30,7 +30,7 @@ scenario:
               - [2.5, 0, 1.0, 0]
           lidar:
             visualize: true
-            range: 60
+            range: 80
             channels: 32
             points_per_second: 100000
             rotation_frequency: 20
@@ -65,12 +65,18 @@ scenario:
 
           lidar_tool:
             enabled: true
-            front_x_min: 2.0
-            front_x_max: 60.0
-            lane_y_abs: 2.0
-            z_min: -2.0
-            z_max: 3.0
-            min_points: 5
+            # Ignore ego-body / near-field points. The previous value 2.0m
+            # often caused false critical risk from very close LiDAR returns.
+            front_x_min: 8.0
+            front_x_max: 80.0
+            lane_y_abs: 1.8
+            # Keep z_min above the road plane to remove ground points.
+            z_min: -1.2
+            z_max: 1.5
+            min_points: 20
+            x_bin_size: 2.0
+            min_points_per_bin: 8
+            distance_percentile: 20.0
 
           camera_tool:
             enabled: true
