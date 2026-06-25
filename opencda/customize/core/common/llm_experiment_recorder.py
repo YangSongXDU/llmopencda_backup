@@ -13,7 +13,7 @@ def _safe_getattr(obj, name, default=None):
 
 
 class LLMExperimentRecorder(object):
-    """Record self-perceived tool calls, LLM decisions, and controls."""
+    """Record tool calls, LLM decisions, maneuvers, and controls."""
 
     def __init__(self, save_path):
         self.save_path = save_path
@@ -27,6 +27,7 @@ class LLMExperimentRecorder(object):
             'ego_x', 'ego_y', 'ego_z', 'ego_yaw', 'ego_speed',
             'called_tools', 'tool_call_count', 'tool_total_cost',
             'camera_called', 'lidar_called', 'radar_called', 'fusion_called',
+            'front_debug_called', 'lane_check_called',
             'camera_possible_front_vehicle', 'camera_confidence',
             'camera_roi_edge_density', 'camera_roi_dark_ratio',
             'lidar_front_distance', 'lidar_point_count',
@@ -35,9 +36,15 @@ class LLMExperimentRecorder(object):
             'radar_front_distance', 'radar_relative_velocity',
             'radar_ttc', 'radar_point_count', 'radar_roi_point_count',
             'radar_raw_point_count', 'radar_selected_bin_point_count',
+            'debug_front_vehicle_detected', 'debug_front_vehicle_distance',
+            'debug_front_vehicle_speed', 'debug_front_vehicle_relative_speed',
+            'left_lane_exists', 'left_lane_clear', 'left_front_gap', 'left_rear_gap',
+            'right_lane_exists', 'right_lane_clear', 'right_front_gap', 'right_rear_gap',
             'fusion_front_distance', 'fusion_ttc', 'fusion_confidence',
             'final_front_distance',
             'risk_level', 'driving_advice', 'target_speed_advice',
+            'maneuver', 'target_lane', 'lane_change_required',
+            'maneuver_applied', 'maneuver_reason',
             'target_speed', 'throttle', 'brake', 'steer',
             'reason'
         ]
@@ -62,6 +69,8 @@ class LLMExperimentRecorder(object):
         camera = tool_results.get('camera_tool', {}) or {}
         lidar = tool_results.get('lidar_tool', {}) or {}
         radar = tool_results.get('radar_tool', {}) or {}
+        front_debug = tool_results.get('front_vehicle_debug_tool', {}) or {}
+        lane = tool_results.get('lane_check_tool', {}) or {}
         fusion = tool_results.get('fusion_tool', {}) or {}
 
         row = {
@@ -78,6 +87,8 @@ class LLMExperimentRecorder(object):
             'lidar_called': 'lidar_tool' in called_tools,
             'radar_called': 'radar_tool' in called_tools,
             'fusion_called': 'fusion_tool' in called_tools,
+            'front_debug_called': 'front_vehicle_debug_tool' in called_tools,
+            'lane_check_called': 'lane_check_tool' in called_tools,
             'camera_possible_front_vehicle': camera.get('possible_front_vehicle', False),
             'camera_confidence': camera.get('confidence', 0.0),
             'camera_roi_edge_density': camera.get('roi_edge_density', 0.0),
@@ -95,6 +106,18 @@ class LLMExperimentRecorder(object):
             'radar_roi_point_count': radar.get('radar_roi_point_count', 0),
             'radar_raw_point_count': radar.get('radar_raw_point_count', 0),
             'radar_selected_bin_point_count': radar.get('selected_bin_point_count', 0),
+            'debug_front_vehicle_detected': front_debug.get('front_vehicle_detected', False),
+            'debug_front_vehicle_distance': front_debug.get('front_vehicle_distance', 999.0),
+            'debug_front_vehicle_speed': front_debug.get('front_vehicle_speed', 0.0),
+            'debug_front_vehicle_relative_speed': front_debug.get('relative_speed', 0.0),
+            'left_lane_exists': lane.get('left_lane_exists', False),
+            'left_lane_clear': lane.get('left_lane_clear', False),
+            'left_front_gap': lane.get('left_front_gap', 999.0),
+            'left_rear_gap': lane.get('left_rear_gap', 999.0),
+            'right_lane_exists': lane.get('right_lane_exists', False),
+            'right_lane_clear': lane.get('right_lane_clear', False),
+            'right_front_gap': lane.get('right_front_gap', 999.0),
+            'right_rear_gap': lane.get('right_rear_gap', 999.0),
             'fusion_front_distance': fusion.get('front_vehicle_distance', 999.0),
             'fusion_ttc': fusion.get('ttc', 99.0),
             'fusion_confidence': fusion.get('confidence', 0.0),
@@ -102,6 +125,11 @@ class LLMExperimentRecorder(object):
             'risk_level': decision.risk_level if decision else '',
             'driving_advice': decision.driving_advice if decision else '',
             'target_speed_advice': decision.target_speed_advice if decision else '',
+            'maneuver': decision.maneuver if decision else '',
+            'target_lane': decision.target_lane if decision else '',
+            'lane_change_required': decision.lane_change_required if decision else False,
+            'maneuver_applied': _safe_getattr(agent, 'last_maneuver_applied', ''),
+            'maneuver_reason': _safe_getattr(agent, 'last_maneuver_reason', ''),
             'target_speed': _safe_getattr(agent, 'last_target_speed', ''),
             'throttle': control.throttle,
             'brake': control.brake,
