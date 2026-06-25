@@ -6,7 +6,11 @@ from opencda.customize.core.tools.camera_tool import CameraTool
 from opencda.customize.core.tools.lidar_tool import LiDARTool
 from opencda.customize.core.tools.radar_tool import RadarTool
 from opencda.customize.core.tools.fusion_tool import FusionTool
-from opencda.customize.core.llm_agent.llm_client import LocalHeuristicLLMClient
+from opencda.customize.core.tools.front_vehicle_debug_tool import \
+    FrontVehicleDebugTool
+from opencda.customize.core.tools.lane_check_tool import LaneCheckTool
+from opencda.customize.core.llm_agent.llm_client import \
+    LocalHeuristicLLMClient, ChatLLMClient
 from opencda.customize.core.llm_agent.prompt_builder import PromptBuilder
 from opencda.customize.core.llm_agent.response_parser import LLMResponseParser
 from opencda.customize.core.llm_agent.safety_shield import SafetyShield
@@ -14,11 +18,12 @@ from opencda.customize.core.llm_agent.safety_shield import SafetyShield
 
 class LLMSensorAgent(object):
     """
-    High-level LLM Agent that calls self-perception tools and decides risk/advice.
+    High-level LLM Agent that calls self-perception tools and decides risk,
+    maneuver, and speed advice.
 
-    The first runnable version uses LocalHeuristicLLMClient as an offline LLM
-    substitute. The interface is designed so a real LLM client can replace it
-    later without changing the planning agent.
+    The default offline mode uses LocalHeuristicLLMClient. Set llm_provider to
+    deepseek/openai-compatible mode and provide an API key env var to use a real
+    LLM while preserving the same JSON interface.
     """
 
     def __init__(self, config=None):
@@ -43,15 +48,29 @@ class LLMSensorAgent(object):
         radar_config['cost'] = tool_cost.get('radar_tool', radar_config.get('cost', 1.5))
         fusion_config = config.get('fusion_tool', {}) or {}
         fusion_config['cost'] = tool_cost.get('fusion_tool', fusion_config.get('cost', 3.0))
+        front_debug_config = config.get('front_vehicle_debug_tool', {}) or {}
+        front_debug_config['cost'] = tool_cost.get(
+            'front_vehicle_debug_tool', front_debug_config.get('cost', 0.2))
+        lane_check_config = config.get('lane_check_tool', {}) or {}
+        lane_check_config['cost'] = tool_cost.get(
+            'lane_check_tool', lane_check_config.get('cost', 0.5))
 
         self.ego_tool = EgoStateTool(cost=tool_cost.get('ego_state_tool', 0.1))
         self.camera_tool = CameraTool(camera_config)
         self.lidar_tool = LiDARTool(lidar_config)
         self.radar_tool = RadarTool(radar_config)
+        self.front_vehicle_debug_tool = FrontVehicleDebugTool(front_debug_config)
+        self.lane_check_tool = LaneCheckTool(lane_check_config)
         self.fusion_tool = FusionTool(fusion_config)
 
-        self.llm_client = LocalHeuristicLLMClient(
+        fallback_client = LocalHeuristicLLMClient(
             self.medium_distance, self.high_distance, self.critical_distance)
+        provider = str(config.get('llm_provider', 'local')).lower()
+        if provider in ['deepseek', 'openai', 'chat']:
+            self.llm_client = ChatLLMClient(config, fallback_client=fallback_client)
+        else:
+            self.llm_client = fallback_client
+
         self.parser = LLMResponseParser()
         self.safety_shield = SafetyShield(
             self.medium_distance, self.high_distance, self.critical_distance)
@@ -70,12 +89,14 @@ class LLMSensorAgent(object):
             return self.lidar_tool.run(context)
         if tool_name == 'radar_tool':
             return self.radar_tool.run(context)
+        if tool_name == 'front_vehicle_debug_tool':
+            return self.front_vehicle_debug_tool.run(context)
+        if tool_name == 'lane_check_tool':
+            return self.lane_check_tool.run(context)
         return None
 
     def run_step(self, vehicle_manager):
-        """
-        Execute one LLM Agent perception-decision step.
-        """
+        """Execute one LLM Agent perception-decision step."""
         self.step += 1
 
         context = {
@@ -92,14 +113,22 @@ class LLMSensorAgent(object):
         called_tools.append('ego_state_tool')
         total_cost += ego_result.cost
 
-        # Run ego-mounted perception tools only. No CARLA server actor location
-        # is used in this agent decision path.
         for tool_name in self.initial_tools:
             result = self._run_tool_by_name(tool_name, context)
             if result is None:
                 continue
             tool_results[tool_name] = result.to_dict()
             called_tools.append(tool_name)
+            total_cost += result.cost
+
+        # Run lane_check whenever a debug front vehicle is present or the user
+        # explicitly listed it in initial_tools. This lets the LLM make a
+        # maneuver decision from front-car + adjacent-lane context.
+        if 'front_vehicle_debug_tool' in tool_results and \
+                'lane_check_tool' not in tool_results:
+            result = self.lane_check_tool.run(context)
+            tool_results['lane_check_tool'] = result.to_dict()
+            called_tools.append('lane_check_tool')
             total_cost += result.cost
 
         should_call_llm = (
@@ -111,13 +140,20 @@ class LLMSensorAgent(object):
             prompt = PromptBuilder.build(
                 ego_state=tool_results['ego_state_tool'],
                 tool_results=tool_results,
-                available_tools=['camera_tool', 'lidar_tool', 'radar_tool', 'fusion_tool'],
+                available_tools=[
+                    'camera_tool', 'lidar_tool', 'radar_tool',
+                    'front_vehicle_debug_tool', 'lane_check_tool', 'fusion_tool'
+                ],
                 constraints={
                     'avoid_full_fusion_when_low_risk': True,
                     'safety_first': True,
                     'self_perception_only': True,
-                    'do_not_use_carla_server_actor_locations': True,
-                    'do_not_output_throttle_brake_steer': True
+                    'debug_ground_truth_may_be_present': True,
+                    'do_not_output_throttle_brake_steer': True,
+                    'allowed_maneuvers': [
+                        'keep_lane', 'follow_front_vehicle',
+                        'overtake_left', 'overtake_right', 'abort_overtake'
+                    ]
                 })
             self.last_prompt = prompt
             llm_text = self.llm_client.complete(prompt)
@@ -144,8 +180,9 @@ class LLMSensorAgent(object):
         self.last_total_cost = total_cost
 
         if self.debug and self.step % self.call_interval == 0:
-            print('[LLMSensorAgent] risk=%s, tools=%s, distance=%.2f, advice=%s, cost=%.2f, reason=%s' % (
+            print('[LLMSensorAgent] risk=%s, maneuver=%s, tools=%s, distance=%.2f, advice=%s, cost=%.2f, reason=%s' % (
                 decision.risk_level,
+                decision.maneuver,
                 '|'.join(called_tools),
                 decision.front_vehicle_distance,
                 decision.driving_advice,
