@@ -5,9 +5,7 @@ import json
 
 
 class PromptBuilder(object):
-    """
-    Build a compact prompt that asks the LLM to output strict JSON.
-    """
+    """Build a compact prompt that asks the LLM to output strict JSON."""
 
     @staticmethod
     def build(ego_state, tool_results, available_tools, constraints):
@@ -15,12 +13,19 @@ class PromptBuilder(object):
             'task': (
                 'Decide which sensor tools should be called next, whether '
                 'selective fusion is needed, and what high-level driving '
-                'advice should be given. Do not output throttle, brake, or steer.'
+                'maneuver should be given. Do not output throttle, brake, or steer.'
             ),
             'ego_state': ego_state,
             'available_tools': available_tools,
             'tool_results': tool_results,
             'constraints': constraints,
+            'maneuver_policy': {
+                'keep_lane': 'No reliable front risk or no need to change lane.',
+                'follow_front_vehicle': 'A front vehicle blocks ego but no adjacent lane is safe.',
+                'overtake_left': 'A slower front vehicle is present and the left lane is clear.',
+                'overtake_right': 'A slower front vehicle is present and the right lane is clear.',
+                'abort_overtake': 'The requested lane change is unsafe or uncertainty is too high.'
+            },
             'required_output_json_schema': {
                 'tools_to_call_next': ['tool_name'],
                 'fusion_required': 'bool',
@@ -28,6 +33,9 @@ class PromptBuilder(object):
                 'front_vehicle_distance': 'float meters, 999 if unknown',
                 'driving_advice': 'keep_speed|slow_down|emergency_slow',
                 'target_speed_advice': 'float km/h',
+                'maneuver': 'keep_lane|follow_front_vehicle|overtake_left|overtake_right|abort_overtake',
+                'target_lane': 'current|left|right',
+                'lane_change_required': 'bool',
                 'reason': 'short explanation'
             }
         }
