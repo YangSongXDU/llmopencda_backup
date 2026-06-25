@@ -13,7 +13,7 @@ def _safe_getattr(obj, name, default=None):
 
 
 class LLMExperimentRecorder(object):
-    """Record tool calls, LLM decisions, and control commands."""
+    """Record self-perceived tool calls, LLM decisions, and controls."""
 
     def __init__(self, save_path):
         self.save_path = save_path
@@ -26,9 +26,15 @@ class LLMExperimentRecorder(object):
             'step',
             'ego_x', 'ego_y', 'ego_z', 'ego_yaw', 'ego_speed',
             'called_tools', 'tool_call_count', 'tool_total_cost',
-            'camera_called', 'lidar_called', 'fusion_called',
+            'camera_called', 'lidar_called', 'radar_called', 'fusion_called',
+            'camera_possible_front_vehicle', 'camera_confidence',
+            'camera_roi_edge_density', 'camera_roi_dark_ratio',
             'lidar_front_distance', 'lidar_point_count',
-            'fusion_front_distance', 'final_front_distance',
+            'lidar_selected_bin_point_count',
+            'radar_front_distance', 'radar_relative_velocity',
+            'radar_ttc', 'radar_point_count',
+            'fusion_front_distance', 'fusion_ttc', 'fusion_confidence',
+            'final_front_distance',
             'risk_level', 'driving_advice', 'target_speed_advice',
             'target_speed', 'throttle', 'brake', 'steer',
             'reason'
@@ -51,7 +57,9 @@ class LLMExperimentRecorder(object):
         tool_results = _safe_getattr(llm_agent, 'last_tool_results', {}) or {}
         called_tools = _safe_getattr(llm_agent, 'last_called_tools', []) or []
 
+        camera = tool_results.get('camera_tool', {}) or {}
         lidar = tool_results.get('lidar_tool', {}) or {}
+        radar = tool_results.get('radar_tool', {}) or {}
         fusion = tool_results.get('fusion_tool', {}) or {}
 
         row = {
@@ -66,10 +74,22 @@ class LLMExperimentRecorder(object):
             'tool_total_cost': _safe_getattr(llm_agent, 'last_total_cost', 0.0),
             'camera_called': 'camera_tool' in called_tools,
             'lidar_called': 'lidar_tool' in called_tools,
+            'radar_called': 'radar_tool' in called_tools,
             'fusion_called': 'fusion_tool' in called_tools,
+            'camera_possible_front_vehicle': camera.get('possible_front_vehicle', False),
+            'camera_confidence': camera.get('confidence', 0.0),
+            'camera_roi_edge_density': camera.get('roi_edge_density', 0.0),
+            'camera_roi_dark_ratio': camera.get('roi_dark_ratio', 0.0),
             'lidar_front_distance': lidar.get('front_obstacle_distance', 999.0),
             'lidar_point_count': lidar.get('point_count', 0),
+            'lidar_selected_bin_point_count': lidar.get('selected_bin_point_count', 0),
+            'radar_front_distance': radar.get('front_object_distance', 999.0),
+            'radar_relative_velocity': radar.get('front_object_relative_velocity', 0.0),
+            'radar_ttc': radar.get('ttc', 99.0),
+            'radar_point_count': radar.get('radar_point_count', 0),
             'fusion_front_distance': fusion.get('front_vehicle_distance', 999.0),
+            'fusion_ttc': fusion.get('ttc', 99.0),
+            'fusion_confidence': fusion.get('confidence', 0.0),
             'final_front_distance': decision.front_vehicle_distance if decision else 999.0,
             'risk_level': decision.risk_level if decision else '',
             'driving_advice': decision.driving_advice if decision else '',
