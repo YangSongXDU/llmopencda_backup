@@ -31,9 +31,9 @@ class RadarSensor(object):
         blueprint = self.world.get_blueprint_library().find(
             'sensor.other.radar')
         blueprint.set_attribute('horizontal_fov', str(config.get(
-            'horizontal_fov', 30.0)))
+            'horizontal_fov', 24.0)))
         blueprint.set_attribute('vertical_fov', str(config.get(
-            'vertical_fov', 10.0)))
+            'vertical_fov', 8.0)))
         blueprint.set_attribute('points_per_second', str(config.get(
             'points_per_second', 1500)))
         blueprint.set_attribute('range', str(config.get('range', 80.0)))
@@ -86,9 +86,7 @@ class RadarSensor(object):
 
 
 class RadarTool(SensorToolBase):
-    """
-    Detect front moving objects and estimate distance / TTC from radar.
-    """
+    """Detect front moving objects and estimate distance / TTC from radar."""
 
     def __init__(self, config=None):
         config = config or {}
@@ -98,16 +96,41 @@ class RadarTool(SensorToolBase):
             enabled=config.get('enabled', True))
         self.config = config
         self.sensor = None
-        self.front_x_min = float(config.get('front_x_min', 3.0))
+        self.front_x_min = float(config.get('front_x_min', 15.0))
         self.front_x_max = float(config.get('front_x_max', 80.0))
-        self.lane_y_abs = float(config.get('lane_y_abs', 2.2))
-        self.z_abs = float(config.get('z_abs', 3.0))
-        self.min_points = int(config.get('min_points', 1))
+        self.lane_y_abs = float(config.get('lane_y_abs', 1.8))
+        self.z_abs = float(config.get('z_abs', 2.5))
+        self.min_points = int(config.get('min_points', 3))
+        self.depth_bin_size = float(config.get('depth_bin_size', 4.0))
+        self.min_points_per_bin = int(config.get('min_points_per_bin', 3))
         self.ttc_max = float(config.get('ttc_max', 99.0))
+        self.max_abs_velocity = float(config.get('max_abs_velocity', 80.0))
+        self.min_confidence = float(config.get('min_confidence', 0.35))
 
     def _ensure_sensor(self, vehicle_manager):
         if self.sensor is None:
             self.sensor = RadarSensor(vehicle_manager.vehicle, self.config)
+
+    def _empty_result(self, reason, raw_count=0, roi_count=0, valid_count=0):
+        return ToolResult(
+            self.tool_name,
+            success=True,
+            data={
+                'front_object_detected': False,
+                'front_object_distance': 999.0,
+                'front_object_relative_velocity': 0.0,
+                'closing_speed': 0.0,
+                'ttc': self.ttc_max,
+                'radar_point_count': int(valid_count),
+                'radar_roi_point_count': int(roi_count),
+                'radar_raw_point_count': int(raw_count),
+                'selected_bin_point_count': 0,
+                'confidence': 0.0,
+                'frame': getattr(self.sensor, 'frame', 0) if self.sensor else 0
+            },
+            cost=self.cost,
+            reason=reason
+        )
 
     def run(self, context):
         if not self.enabled:
@@ -121,61 +144,61 @@ class RadarTool(SensorToolBase):
 
         self._ensure_sensor(vehicle_manager)
         detections = self.sensor.data or []
-        if len(detections) == 0:
-            return ToolResult(
-                self.tool_name,
-                success=True,
-                data={
-                    'front_object_detected': False,
-                    'front_object_distance': 999.0,
-                    'front_object_relative_velocity': 0.0,
-                    'ttc': self.ttc_max,
-                    'radar_point_count': 0,
-                    'confidence': 0.0,
-                    'frame': getattr(self.sensor, 'frame', 0)
-                },
-                cost=self.cost,
-                reason='Radar frame has no detections yet.'
-            )
+        raw_count = len(detections)
+        if raw_count == 0:
+            return self._empty_result('Radar frame has no detections yet.')
 
-        front = []
+        roi_front = []
+        valid_front = []
         for det in detections:
             if (det['x'] > self.front_x_min and
                     det['x'] < self.front_x_max and
                     abs(det['y']) < self.lane_y_abs and
                     abs(det['z']) < self.z_abs):
-                front.append(det)
+                roi_front.append(det)
+                if abs(det['velocity']) <= self.max_abs_velocity:
+                    valid_front.append(det)
 
-        if len(front) < self.min_points:
-            return ToolResult(
-                self.tool_name,
-                success=True,
-                data={
-                    'front_object_detected': False,
-                    'front_object_distance': 999.0,
-                    'front_object_relative_velocity': 0.0,
-                    'ttc': self.ttc_max,
-                    'radar_point_count': len(front),
-                    'confidence': 0.0,
-                    'frame': getattr(self.sensor, 'frame', 0)
-                },
-                cost=self.cost,
-                reason='No radar detections in the ego-lane front ROI.'
-            )
+        if len(valid_front) < self.min_points:
+            return self._empty_result(
+                'No stable radar cluster in the ego-lane front ROI.',
+                raw_count=raw_count,
+                roi_count=len(roi_front),
+                valid_count=len(valid_front))
 
-        # Use the nearest valid radar detection in front.
-        front = sorted(front, key=lambda d: d['depth'])
-        nearest = front[0]
-        distance = float(nearest['depth'])
-        rel_velocity = float(nearest['velocity'])
+        valid_front = sorted(valid_front, key=lambda d: d['depth'])
+        selected = None
+        current = self.front_x_min
+        while current < self.front_x_max:
+            nxt = current + self.depth_bin_size
+            bin_points = [d for d in valid_front if current <= d['depth'] < nxt]
+            if len(bin_points) >= self.min_points_per_bin:
+                selected = bin_points
+                break
+            current = nxt
 
-        # CARLA radar velocity is the relative radial velocity. In practice,
-        # negative values often represent closing objects in front. We also
-        # expose the raw relative velocity for later calibration.
+        if not selected:
+            return self._empty_result(
+                'No dense radar depth bin found after clutter filtering.',
+                raw_count=raw_count,
+                roi_count=len(roi_front),
+                valid_count=len(valid_front))
+
+        distances = np.array([d['depth'] for d in selected], dtype=np.float32)
+        velocities = np.array([d['velocity'] for d in selected], dtype=np.float32)
+        distance = float(np.median(distances))
+        rel_velocity = float(np.median(velocities))
         closing_speed = max(0.0, -rel_velocity)
         ttc = distance / closing_speed if closing_speed > 0.1 else self.ttc_max
         ttc = min(float(ttc), self.ttc_max)
-        confidence = min(1.0, len(front) / 5.0)
+        confidence = min(1.0, len(selected) / float(max(self.min_points_per_bin * 3, 1)))
+
+        if confidence < self.min_confidence:
+            return self._empty_result(
+                'Radar cluster confidence is below threshold.',
+                raw_count=raw_count,
+                roi_count=len(roi_front),
+                valid_count=len(valid_front))
 
         return ToolResult(
             self.tool_name,
@@ -186,12 +209,15 @@ class RadarTool(SensorToolBase):
                 'front_object_relative_velocity': rel_velocity,
                 'closing_speed': closing_speed,
                 'ttc': ttc,
-                'radar_point_count': len(front),
+                'radar_point_count': len(valid_front),
+                'radar_roi_point_count': len(roi_front),
+                'radar_raw_point_count': raw_count,
+                'selected_bin_point_count': len(selected),
                 'confidence': confidence,
                 'frame': getattr(self.sensor, 'frame', 0)
             },
             cost=self.cost,
-            reason='Front object distance and TTC estimated from radar detections.'
+            reason='Front object distance and TTC estimated from a filtered radar depth cluster.'
         )
 
     def destroy(self):
