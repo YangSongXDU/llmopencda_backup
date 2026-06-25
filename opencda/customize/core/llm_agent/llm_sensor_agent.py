@@ -81,6 +81,9 @@ class LLMSensorAgent(object):
         self.last_called_tools = []
         self.last_total_cost = 0.0
         self.last_prompt = ''
+        self.last_llm_backend = getattr(self.llm_client, 'last_backend', provider)
+        self.last_llm_fallback_used = False
+        self.last_llm_error = ''
 
     def _run_tool_by_name(self, tool_name, context):
         if tool_name == 'camera_tool':
@@ -157,6 +160,10 @@ class LLMSensorAgent(object):
                 })
             self.last_prompt = prompt
             llm_text = self.llm_client.complete(prompt)
+            self.last_llm_backend = getattr(self.llm_client, 'last_backend', '')
+            self.last_llm_fallback_used = bool(getattr(
+                self.llm_client, 'last_fallback_used', False))
+            self.last_llm_error = getattr(self.llm_client, 'last_error', '')
             decision = self.parser.parse(llm_text, self.last_decision)
         else:
             decision = self.last_decision
@@ -180,7 +187,9 @@ class LLMSensorAgent(object):
         self.last_total_cost = total_cost
 
         if self.debug and self.step % self.call_interval == 0:
-            print('[LLMSensorAgent] risk=%s, maneuver=%s, tools=%s, distance=%.2f, advice=%s, cost=%.2f, reason=%s' % (
+            print('[LLMSensorAgent] backend=%s, fallback=%s, risk=%s, maneuver=%s, tools=%s, distance=%.2f, advice=%s, cost=%.2f, reason=%s' % (
+                self.last_llm_backend,
+                self.last_llm_fallback_used,
                 decision.risk_level,
                 decision.maneuver,
                 '|'.join(called_tools),
