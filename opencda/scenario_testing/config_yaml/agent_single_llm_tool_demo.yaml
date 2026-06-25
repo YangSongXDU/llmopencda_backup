@@ -1,15 +1,20 @@
 description: |-
-  Single CAV demo for LLM Agent driven sensor-as-tools selection.
-  The LLM Agent calls CameraTool, LiDARTool, RadarTool and FusionTool
-  summaries using ego self-perceived sensor data only. CARLA server actor
-  locations are not used as control inputs in the LLM behavior path.
+  Single CAV demo for LLM Agent driven sensor-as-tools selection and a first
+  overtaking prototype. Camera/LiDAR/Radar remain ego-sensor tools. The
+  front_vehicle_debug_tool and lane_check_tool use CARLA actors/map for
+  debugging and first maneuver validation; disable them for strict
+  self-perception-only experiments.
 
 carla_traffic_manager:
   vehicle_list:
-    - spawn_position: [ -300, 8.3, 0.3, 0, 0, 0 ]
-      vehicle_speed_perc: 20
-    - spawn_position: [ -260, 4.8, 0.3, 0, 0, 0 ]
-      vehicle_speed_perc: -50
+    # Slow front vehicle in the ego lane. It is intentionally closer than before
+    # so that the overtaking maneuver can be observed clearly.
+    - spawn_position: [ -330, 8.3, 0.3, 0, 0, 0 ]
+      vehicle_speed_perc: 60
+    # Adjacent-lane traffic farther ahead, leaving enough gap for an initial
+    # lane-change/overtake decision.
+    - spawn_position: [ -250, 4.8, 0.3, 0, 0, 0 ]
+      vehicle_speed_perc: -20
 
 scenario:
   max_steps: 1000
@@ -44,18 +49,35 @@ scenario:
 
       behavior:
         use_llm_tool_agent: true
-        # Do not pass CARLA-server object lists to the customized behavior path.
-        # The LLM agent must use ego camera / LiDAR / radar tool outputs only.
         self_perception_only: true
         local_planner:
           debug_trajectory: true
           debug: true
 
+        llm_overtake:
+          enabled: true
+          lookahead_distance: 45.0
+          cooldown_steps: 80
+
         llm_sensor_agent:
           enabled: true
           debug: true
-          llm_call_interval: 20
-          initial_tools: [camera_tool, lidar_tool, radar_tool]
+          # More responsive than the earlier 20-frame interval so lane-change
+          # decisions can be updated quickly.
+          llm_call_interval: 5
+          # For the first overtaking prototype, debug front/lane tools are
+          # enabled. They make the front-car distance visible in logs/CSV and
+          # allow a robust overtake_left/right decision.
+          initial_tools: [camera_tool, lidar_tool, radar_tool, front_vehicle_debug_tool, lane_check_tool]
+
+          # llm_provider: local uses deterministic heuristic logic.
+          # To call a real DeepSeek-compatible LLM, set llm_provider: deepseek
+          # and export DEEPSEEK_API_KEY in your shell before running.
+          llm_provider: local
+          llm_model: deepseek-chat
+          llm_base_url: https://api.deepseek.com/chat/completions
+          api_key_env: DEEPSEEK_API_KEY
+          temperature: 0.0
 
           risk_threshold:
             medium_distance: 60.0
@@ -67,13 +89,25 @@ scenario:
             camera_tool: 1.0
             lidar_tool: 2.0
             radar_tool: 1.5
+            front_vehicle_debug_tool: 0.2
+            lane_check_tool: 0.5
             fusion_tool: 3.0
+
+          front_vehicle_debug_tool:
+            enabled: true
+            max_distance: 120.0
+            lane_y_abs: 2.5
+            same_lane_only: true
+
+          lane_check_tool:
+            enabled: true
+            safe_front_distance: 25.0
+            safe_rear_distance: 12.0
+            check_distance: 60.0
 
           lidar_tool:
             enabled: true
-            # Auto checks +x and -x because raw LiDAR frame orientation may vary.
             axis_mode: auto
-            # Ignore near-field ego-body / road-side clutter that appears around 5-6 m.
             front_x_min: 12.0
             front_x_max: 80.0
             lane_y_abs: 2.5
@@ -91,7 +125,6 @@ scenario:
             vertical_fov: 8.0
             points_per_second: 1500
             position: [2.5, 0.0, 1.0, 0.0]
-            # Ignore very near radar returns because they are often road/ego-body clutter.
             front_x_min: 15.0
             front_x_max: 80.0
             lane_y_abs: 1.8
@@ -105,8 +138,6 @@ scenario:
 
           camera_tool:
             enabled: true
-            # ROI is normalized: [x1, y1, x2, y2]. It covers the lower-center
-            # front region of the RGB image.
             front_roi: [0.30, 0.45, 0.70, 0.85]
             edge_threshold: 35.0
             edge_density_threshold: 0.035
