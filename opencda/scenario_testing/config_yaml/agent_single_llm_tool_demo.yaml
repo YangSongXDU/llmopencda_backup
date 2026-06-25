@@ -65,9 +65,9 @@ scenario:
         llm_sensor_agent:
           enabled: true
           debug: true
-          # More responsive than the earlier 20-frame interval so lane-change
-          # decisions can be updated quickly.
-          llm_call_interval: 5
+          # For real API tests, 20 is cheaper and less likely to block CARLA.
+          # For local deterministic tests, 5 is also acceptable.
+          llm_call_interval: 20
           # For the first overtaking prototype, debug front/lane tools are
           # enabled. They make the front-car distance visible in logs/CSV and
           # allow a robust overtake_left/right decision.
@@ -77,8 +77,10 @@ scenario:
           # To call a real DeepSeek-compatible LLM, set llm_provider: deepseek
           # and export DEEPSEEK_API_KEY in your shell before running.
           llm_provider: local
-          llm_model: deepseek-chat
-          llm_base_url: https://api.deepseek.com/chat/completions
+          llm_model: deepseek-v4-flash
+          # This can be either SDK-style base URL or full chat endpoint. The
+          # client normalizes both into /chat/completions.
+          llm_base_url: https://api.deepseek.com
           api_key_env: DEEPSEEK_API_KEY
           temperature: 0.0
 
