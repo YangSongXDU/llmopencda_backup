@@ -64,6 +64,9 @@ def run_scenario(opt, scenario_params):
 
         spectator = scenario_manager.world.get_spectator()
         max_steps = int(scenario_params['scenario'].get('max_steps', 1000))
+        if max_steps <= 0:
+            max_steps = 1000
+        print('[agent_single_llm_tool_demo] max_steps=%d' % max_steps)
 
         for step in range(max_steps):
             scenario_manager.tick()
