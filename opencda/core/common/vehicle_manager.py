@@ -29,50 +29,6 @@ from opencda.core.common.data_dumper import DataDumper
 class VehicleManager(object):
     """
     A class manager to embed different modules with vehicle together.
-
-    Parameters
-    ----------
-    vehicle : carla.Vehicle
-        The carla.Vehicle. We need this class to spawn our gnss and imu sensor.
-
-    config_yaml : dict
-        The configuration dictionary of this CAV.
-
-    application : list
-        The application category, currently support:['single','platoon'].
-
-    carla_map : carla.Map
-        The CARLA simulation map.
-
-    cav_world : opencda object
-        CAV World. This is used for V2X communication simulation.
-
-    current_time : str
-        Timestamp of the simulation beginning, used for data dumping.
-
-    data_dumping : bool
-        Indicates whether to dump sensor data during simulation.
-
-    Attributes
-    ----------
-    v2x_manager : opencda object
-        The current V2X manager.
-
-    localizer : opencda object
-        The current localization manager.
-
-    perception_manager : opencda object
-        The current V2X perception manager.
-
-    agent : opencda object
-        The current carla agent that handles the basic behavior
-         planning of ego vehicle.
-
-    controller : opencda object
-        The current control manager.
-
-    data_dumper : opencda object
-        Used for dumping sensor data.
     """
 
     def __init__(
@@ -102,7 +58,9 @@ class VehicleManager(object):
         # localization module
         self.localizer = LocalizationManager(
             vehicle, sensing_config['localization'], carla_map)
-        # perception module
+        # perception module. This may still be used to spawn ego sensors and
+        # visualize data. In self-perception mode, CARLA-server object outputs
+        # from detect() are sanitized before being passed to the LLM behavior.
         self.perception_manager = PerceptionManager(
             vehicle, sensing_config['perception'], cav_world,
             data_dumping)
@@ -153,23 +111,6 @@ class VehicleManager(object):
             end_reset=True):
         """
         Set global route.
-
-        Parameters
-        ----------
-        start_location : carla.location
-            The CAV start location.
-
-        end_location : carla.location
-            The CAV destination.
-
-        clean : bool
-             Indicator of whether clean waypoint queue.
-
-        end_reset : bool
-            Indicator of whether reset the end location.
-
-        Returns
-        -------
         """
 
         self.agent.set_destination(
@@ -186,8 +127,14 @@ class VehicleManager(object):
         ego_pos = self.localizer.get_ego_pos()
         ego_spd = self.localizer.get_ego_spd()
 
-        # object detection
+        # object detection. This call also keeps OpenCDA sensor managers alive.
+        # However, if the customized LLM agent is in self-perception mode,
+        # the returned CARLA-server object list must not be used for behavior.
         objects = self.perception_manager.detect(ego_pos)
+        if getattr(self.agent, 'self_perception_only', False):
+            method_objects = {'vehicles': []}
+        else:
+            method_objects = objects
 
         # update the ego pose for map manager
         self.map_manager.update_information(ego_pos)
@@ -196,7 +143,7 @@ class VehicleManager(object):
         safety_input = {
             'ego_pos': ego_pos,
             'ego_speed': ego_spd,
-            'objects': objects,
+            'objects': method_objects,
             'carla_map': self.carla_map,
             'world': self.vehicle.get_world(),
             'static_bev': self.map_manager.static_bev,
@@ -208,7 +155,7 @@ class VehicleManager(object):
         # and then v2x manager will search the nearby cavs
         self.v2x_manager.update_info(ego_pos, ego_spd)
 
-        self.agent.update_information(ego_pos, ego_spd, objects)
+        self.agent.update_information(ego_pos, ego_spd, method_objects)
         # pass position and speed info to controller
         self.controller.update_info(ego_pos, ego_spd)
 
@@ -233,6 +180,8 @@ class VehicleManager(object):
         """
         Destroy the actor vehicle
         """
+        if hasattr(self.agent, 'destroy'):
+            self.agent.destroy()
         self.perception_manager.destroy()
         self.localizer.destroy()
         self.vehicle.destroy()
