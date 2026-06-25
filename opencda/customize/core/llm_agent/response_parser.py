@@ -5,11 +5,17 @@ import json
 
 
 class LLMDecision(object):
-    """
-    Structured high-level decision produced by the LLM Sensor Agent.
-    """
+    """Structured high-level decision produced by the LLM Sensor Agent."""
 
     VALID_RISK = ['low', 'medium', 'high', 'critical']
+    VALID_MANEUVER = [
+        'keep_lane',
+        'follow_front_vehicle',
+        'overtake_left',
+        'overtake_right',
+        'abort_overtake'
+    ]
+    VALID_TARGET_LANE = ['current', 'left', 'right']
 
     def __init__(self,
                  tools_to_call_next=None,
@@ -18,6 +24,9 @@ class LLMDecision(object):
                  front_vehicle_distance=999.0,
                  driving_advice='keep_speed',
                  target_speed_advice=50.0,
+                 maneuver='keep_lane',
+                 target_lane='current',
+                 lane_change_required=False,
                  reason=''):
         self.tools_to_call_next = tools_to_call_next or []
         self.fusion_required = bool(fusion_required)
@@ -25,6 +34,9 @@ class LLMDecision(object):
         self.front_vehicle_distance = float(front_vehicle_distance)
         self.driving_advice = driving_advice
         self.target_speed_advice = float(target_speed_advice)
+        self.maneuver = maneuver if maneuver in self.VALID_MANEUVER else 'keep_lane'
+        self.target_lane = target_lane if target_lane in self.VALID_TARGET_LANE else 'current'
+        self.lane_change_required = bool(lane_change_required)
         self.reason = reason
 
     def to_dict(self):
@@ -35,6 +47,9 @@ class LLMDecision(object):
             'front_vehicle_distance': self.front_vehicle_distance,
             'driving_advice': self.driving_advice,
             'target_speed_advice': self.target_speed_advice,
+            'maneuver': self.maneuver,
+            'target_lane': self.target_lane,
+            'lane_change_required': self.lane_change_required,
             'reason': self.reason
         }
 
@@ -61,5 +76,8 @@ class LLMResponseParser(object):
             front_vehicle_distance=data.get('front_vehicle_distance', 999.0),
             driving_advice=data.get('driving_advice', 'keep_speed'),
             target_speed_advice=data.get('target_speed_advice', 50.0),
+            maneuver=data.get('maneuver', 'keep_lane'),
+            target_lane=data.get('target_lane', 'current'),
+            lane_change_required=data.get('lane_change_required', False),
             reason=data.get('reason', '')
         )
