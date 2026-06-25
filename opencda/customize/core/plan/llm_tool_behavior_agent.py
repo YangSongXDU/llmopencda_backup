@@ -13,9 +13,9 @@ class LLMToolBehaviorAgent(BehaviorAgent):
     Keep OpenCDA's original path planning, but adjust target speed according
     to the LLM Sensor Tool Agent decision.
 
-    When self_perception_only is enabled, CARLA-server object lists from the
-    default PerceptionManager are not passed into the behavior planner. The
-    speed control decision then depends on self-perceived tool outputs only.
+    When self_perception_only is enabled, CARLA-server vehicle lists from the
+    default PerceptionManager are not used by this LLM behavior path. The
+    speed control decision depends on self-perceived tool outputs only.
     """
 
     def __init__(self, vehicle, carla_map, config_yaml):
@@ -36,16 +36,31 @@ class LLMToolBehaviorAgent(BehaviorAgent):
         """
         self.vehicle_manager = vehicle_manager
 
+    def is_close_to_destination(self):
+        """
+        Disable BehaviorAgent's sys.exit-based termination for this demo.
+
+        The original BehaviorAgent ends a scenario by calling sys.exit(0) when
+        it thinks the destination is close. In this customized demo the scenario
+        is already controlled by max_steps, and sys.exit would skip the logging
+        loop silently. Therefore we let the scenario runner, not BehaviorAgent,
+        decide when to stop.
+        """
+        return False
+
     def update_information(self, ego_pos, ego_speed, objects):
         """
         Update behavior information.
 
         The OpenCDA perception objects may still be produced internally for
-        visualization or baseline modules. In self_perception_only mode, those
-        objects are not used by this LLM-based behavior agent.
+        visualization or safety utilities. In self_perception_only mode, server
+        vehicle objects are removed before entering this behavior planner.
         """
         if self.self_perception_only:
-            behavior_objects = {'vehicles': []}
+            behavior_objects = dict(objects) if isinstance(objects, dict) else {}
+            behavior_objects['vehicles'] = []
+            if 'traffic_lights' not in behavior_objects:
+                behavior_objects['traffic_lights'] = []
         else:
             behavior_objects = objects
 
