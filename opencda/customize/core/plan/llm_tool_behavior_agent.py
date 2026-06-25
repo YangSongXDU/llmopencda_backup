@@ -12,11 +12,17 @@ class LLMToolBehaviorAgent(BehaviorAgent):
     """
     Keep OpenCDA's original path planning, but adjust target speed according
     to the LLM Sensor Tool Agent decision.
+
+    When self_perception_only is enabled, CARLA-server object lists from the
+    default PerceptionManager are not passed into the behavior planner. The
+    speed control decision then depends on self-perceived tool outputs only.
     """
 
     def __init__(self, vehicle, carla_map, config_yaml):
         super(LLMToolBehaviorAgent, self).__init__(vehicle, carla_map, config_yaml)
         llm_config = config_yaml.get('llm_sensor_agent', {}) or {}
+        self.self_perception_only = bool(config_yaml.get(
+            'self_perception_only', True))
         self.llm_sensor_agent = LLMSensorAgent(llm_config)
         self.vehicle_manager = None
         self.last_llm_decision = None
@@ -32,14 +38,19 @@ class LLMToolBehaviorAgent(BehaviorAgent):
 
     def update_information(self, ego_pos, ego_speed, objects):
         """
-        Keep original BehaviorAgent updates.
+        Update behavior information.
 
-        The objects argument may still be produced by OpenCDA PerceptionManager,
-        but the LLM tool decision uses vehicle-mounted tool summaries instead
-        of CARLA server objects for front-distance control.
+        The OpenCDA perception objects may still be produced internally for
+        visualization or baseline modules. In self_perception_only mode, those
+        objects are not used by this LLM-based behavior agent.
         """
+        if self.self_perception_only:
+            behavior_objects = {'vehicles': []}
+        else:
+            behavior_objects = objects
+
         super(LLMToolBehaviorAgent, self).update_information(
-            ego_pos, ego_speed, objects)
+            ego_pos, ego_speed, behavior_objects)
 
         if self.vehicle_manager is not None:
             self.last_llm_decision = self.llm_sensor_agent.run_step(
@@ -65,3 +76,6 @@ class LLMToolBehaviorAgent(BehaviorAgent):
         self.last_target_speed = target_speed
         self.last_target_location = target_location
         return target_speed, target_location
+
+    def destroy(self):
+        self.llm_sensor_agent.destroy()
