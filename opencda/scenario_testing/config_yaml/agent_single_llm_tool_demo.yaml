@@ -73,15 +73,16 @@ scenario:
             enabled: true
             # Auto checks +x and -x because raw LiDAR frame orientation may vary.
             axis_mode: auto
-            front_x_min: 5.0
+            # Ignore near-field ego-body / road-side clutter that appears around 5-6 m.
+            front_x_min: 12.0
             front_x_max: 80.0
             lane_y_abs: 2.5
-            z_min: -2.2
+            z_min: -1.2
             z_max: 2.0
             min_points: 5
-            x_bin_size: 3.0
-            min_points_per_bin: 3
-            distance_percentile: 30.0
+            x_bin_size: 4.0
+            min_points_per_bin: 5
+            distance_percentile: 40.0
 
           radar_tool:
             enabled: true
