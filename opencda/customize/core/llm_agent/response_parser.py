@@ -58,12 +58,30 @@ class LLMResponseParser(object):
     """Parse JSON text into LLMDecision."""
 
     @staticmethod
+    def _extract_json(text):
+        if not isinstance(text, str):
+            return text
+        s = text.strip()
+        if s.startswith('```'):
+            lines = s.splitlines()
+            if len(lines) >= 3:
+                s = '\n'.join(lines[1:-1]).strip()
+                if s.lower().startswith('json'):
+                    s = s[4:].strip()
+        if not s.startswith('{'):
+            start = s.find('{')
+            end = s.rfind('}')
+            if start >= 0 and end > start:
+                s = s[start:end + 1]
+        return s
+
+    @staticmethod
     def parse(text, fallback_decision=None):
         if isinstance(text, dict):
             data = text
         else:
             try:
-                data = json.loads(text)
+                data = json.loads(LLMResponseParser._extract_json(text))
             except Exception:
                 return fallback_decision or LLMDecision(
                     risk_level='low',
