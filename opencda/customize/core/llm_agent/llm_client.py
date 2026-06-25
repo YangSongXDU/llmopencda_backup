@@ -20,9 +20,17 @@ class LocalHeuristicLLMClient(object):
         self.medium_distance = float(medium_distance)
         self.high_distance = float(high_distance)
         self.critical_distance = float(critical_distance)
-        self.high_ttc = 4.5
-        self.critical_ttc = 2.5
+        # Keep radar-only risk conservative. Radar is useful for TTC, but in
+        # this CARLA setup it can see clutter or adjacent-lane vehicles. A local
+        # fallback should therefore be less aggressive than the safety shield.
+        self.high_ttc = 3.5
+        self.critical_ttc = 2.0
+        self.min_radar_confidence = 0.45
+        self.min_radar_bin_points = 5
         self.overtake_distance = 45.0
+        self.last_backend = 'local'
+        self.last_fallback_used = False
+        self.last_error = ''
 
     def _decision(self, risk, distance, advice, speed, fusion, reason,
                   maneuver='keep_lane', target_lane='current',
@@ -54,6 +62,10 @@ class LocalHeuristicLLMClient(object):
         return tool_result
 
     def complete(self, prompt):
+        self.last_backend = 'local'
+        self.last_fallback_used = False
+        self.last_error = ''
+
         try:
             payload = json.loads(prompt)
         except Exception:
@@ -72,12 +84,12 @@ class LocalHeuristicLLMClient(object):
         radar_distance = float(radar.get('front_object_distance', 999.0))
         radar_ttc = float(radar.get('ttc', 99.0))
         radar_conf = float(radar.get('confidence', 0.0))
+        radar_bin_points = int(radar.get('selected_bin_point_count', 0))
         camera_possible = bool(camera.get('possible_front_vehicle', False))
         camera_conf = float(camera.get('confidence', 0.0))
 
         debug_front_detected = bool(front_debug.get('front_vehicle_detected', False))
         debug_front_distance = float(front_debug.get('front_vehicle_distance', 999.0))
-        debug_relative_speed = float(front_debug.get('relative_speed', 0.0))
         left_clear = bool(lane.get('left_lane_exists', False) and lane.get('left_lane_clear', False))
         right_clear = bool(lane.get('right_lane_exists', False) and lane.get('right_lane_clear', False))
 
@@ -103,10 +115,16 @@ class LocalHeuristicLLMClient(object):
                 maneuver='follow_front_vehicle', target_lane='current',
                 lane_change_required=False))
 
+        radar_reliable_ttc = (
+            radar_detected and radar_distance < self.high_distance and
+            radar_conf >= self.min_radar_confidence and
+            radar_bin_points >= self.min_radar_bin_points
+        )
+
         # Sensor-only safety logic.
         if lidar_detected:
             distance = lidar_distance
-        elif radar_detected and radar_ttc < self.high_ttc:
+        elif radar_reliable_ttc and radar_ttc < self.high_ttc:
             distance = radar_distance
         else:
             distance = 999.0
@@ -117,7 +135,7 @@ class LocalHeuristicLLMClient(object):
                 'LiDAR self-perception reports a critical front distance.',
                 maneuver='follow_front_vehicle'))
 
-        if radar_detected and radar_ttc < self.critical_ttc and radar_conf >= 0.35:
+        if radar_reliable_ttc and radar_ttc < self.critical_ttc:
             return json.dumps(self._decision(
                 'critical', radar_distance, 'emergency_slow', 5.0, True,
                 'Radar self-perception reports a critical TTC.',
@@ -129,7 +147,7 @@ class LocalHeuristicLLMClient(object):
                 'LiDAR self-perception reports a high-risk front distance.',
                 maneuver='follow_front_vehicle'))
 
-        if radar_detected and radar_ttc < self.high_ttc and radar_conf >= 0.35:
+        if radar_reliable_ttc and radar_ttc < self.high_ttc:
             return json.dumps(self._decision(
                 'high', radar_distance, 'slow_down', 15.0, True,
                 'Radar self-perception reports a high-risk TTC.',
@@ -168,13 +186,24 @@ class ChatLLMClient(object):
         self.timeout = float(config.get('llm_timeout', 20.0))
         self.temperature = float(config.get('temperature', 0.0))
         self.fallback_client = fallback_client
+        self.last_backend = self.provider
+        self.last_fallback_used = False
+        self.last_error = ''
 
     def complete(self, prompt):
+        self.last_backend = self.provider
+        self.last_fallback_used = False
+        self.last_error = ''
+
         api_key = os.environ.get(self.api_key_env, '')
         if not api_key:
+            self.last_error = 'Missing API key environment variable: %s' % self.api_key_env
             if self.fallback_client is not None:
-                return self.fallback_client.complete(prompt)
-            raise RuntimeError('Missing API key environment variable: %s' % self.api_key_env)
+                text = self.fallback_client.complete(prompt)
+                self.last_backend = 'local_fallback_missing_key'
+                self.last_fallback_used = True
+                return text
+            raise RuntimeError(self.last_error)
 
         body = {
             'model': self.model,
@@ -204,8 +233,14 @@ class ChatLLMClient(object):
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 payload = json.loads(resp.read().decode('utf-8'))
+            self.last_backend = self.provider
+            self.last_fallback_used = False
             return payload['choices'][0]['message']['content']
-        except Exception:
+        except Exception as exc:
+            self.last_error = str(exc)
             if self.fallback_client is not None:
-                return self.fallback_client.complete(prompt)
+                text = self.fallback_client.complete(prompt)
+                self.last_backend = 'local_fallback_api_error'
+                self.last_fallback_used = True
+                return text
             raise
