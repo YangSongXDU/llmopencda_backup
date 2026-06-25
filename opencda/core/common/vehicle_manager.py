@@ -59,7 +59,7 @@ class VehicleManager(object):
         self.localizer = LocalizationManager(
             vehicle, sensing_config['localization'], carla_map)
         # perception module. This may still be used to spawn ego sensors and
-        # visualize data. In self-perception mode, CARLA-server object outputs
+        # visualize data. In self-perception mode, CARLA-server vehicle outputs
         # from detect() are sanitized before being passed to the LLM behavior.
         self.perception_manager = PerceptionManager(
             vehicle, sensing_config['perception'], cav_world,
@@ -103,6 +103,21 @@ class VehicleManager(object):
 
         cav_world.update_vehicle_manager(self)
 
+    @staticmethod
+    def _sanitize_self_perception_objects(objects):
+        """
+        Remove CARLA-server vehicle objects while preserving other keys.
+
+        OpenCDA SafetyManager still expects keys such as traffic_lights. We
+        therefore only remove vehicles from the default perception output, while
+        keeping non-vehicle information available for safety utilities.
+        """
+        sanitized = dict(objects) if isinstance(objects, dict) else {}
+        sanitized['vehicles'] = []
+        if 'traffic_lights' not in sanitized:
+            sanitized['traffic_lights'] = []
+        return sanitized
+
     def set_destination(
             self,
             start_location,
@@ -129,10 +144,10 @@ class VehicleManager(object):
 
         # object detection. This call also keeps OpenCDA sensor managers alive.
         # However, if the customized LLM agent is in self-perception mode,
-        # the returned CARLA-server object list must not be used for behavior.
+        # the returned CARLA-server vehicle list must not be used for behavior.
         objects = self.perception_manager.detect(ego_pos)
         if getattr(self.agent, 'self_perception_only', False):
-            method_objects = {'vehicles': []}
+            method_objects = self._sanitize_self_perception_objects(objects)
         else:
             method_objects = objects
 
