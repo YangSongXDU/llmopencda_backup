@@ -1,7 +1,8 @@
 description: |-
   Single CAV demo for LLM Agent driven sensor-as-tools selection.
-  The LLM Agent calls CameraTool, LiDARTool and FusionTool summaries
-  instead of using CARLA server vehicle positions as control input.
+  The LLM Agent calls CameraTool, LiDARTool, RadarTool and FusionTool
+  summaries using ego self-perceived sensor data only. CARLA server actor
+  locations are not used as control inputs in the LLM behavior path.
 
 carla_traffic_manager:
   vehicle_list:
@@ -43,6 +44,9 @@ scenario:
 
       behavior:
         use_llm_tool_agent: true
+        # Do not pass CARLA-server object lists to the customized behavior path.
+        # The LLM agent must use ego camera / LiDAR / radar tool outputs only.
+        self_perception_only: true
         local_planner:
           debug_trajectory: true
           debug: true
@@ -51,6 +55,7 @@ scenario:
           enabled: true
           debug: true
           llm_call_interval: 20
+          initial_tools: [camera_tool, lidar_tool, radar_tool]
 
           risk_threshold:
             medium_distance: 60.0
@@ -61,16 +66,14 @@ scenario:
             ego_state_tool: 0.1
             camera_tool: 1.0
             lidar_tool: 2.0
+            radar_tool: 1.5
             fusion_tool: 3.0
 
           lidar_tool:
             enabled: true
-            # Ignore ego-body / near-field points. The previous value 2.0m
-            # often caused false critical risk from very close LiDAR returns.
             front_x_min: 8.0
             front_x_max: 80.0
             lane_y_abs: 1.8
-            # Keep z_min above the road plane to remove ground points.
             z_min: -1.2
             z_max: 1.5
             min_points: 20
@@ -78,11 +81,33 @@ scenario:
             min_points_per_bin: 8
             distance_percentile: 20.0
 
+          radar_tool:
+            enabled: true
+            range: 80.0
+            horizontal_fov: 30.0
+            vertical_fov: 10.0
+            points_per_second: 1500
+            position: [2.5, 0.0, 1.0, 0.0]
+            front_x_min: 3.0
+            front_x_max: 80.0
+            lane_y_abs: 2.2
+            z_abs: 3.0
+            min_points: 1
+            ttc_max: 99.0
+
           camera_tool:
             enabled: true
+            # ROI is normalized: [x1, y1, x2, y2]. It covers the lower-center
+            # front region of the RGB image.
+            front_roi: [0.30, 0.45, 0.70, 0.85]
+            edge_threshold: 35.0
+            edge_density_threshold: 0.035
+            dark_ratio_threshold: 0.08
+            dark_pixel_threshold: 80.0
 
           fusion_tool:
             enabled: true
+            max_lidar_radar_distance_gap: 8.0
 
       v2x:
         communication_range: 45
