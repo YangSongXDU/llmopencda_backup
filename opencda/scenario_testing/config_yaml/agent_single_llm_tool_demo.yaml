@@ -57,6 +57,9 @@ scenario:
         llm_overtake:
           enabled: true
           lookahead_distance: 45.0
+          return_lookahead_distance: 45.0
+          pass_distance_margin: 12.0
+          min_passing_distance: 65.0
           cooldown_steps: 80
 
         llm_sensor_agent:
