@@ -4,6 +4,7 @@
 from opencda.customize.core.tools.ego_state_tool import EgoStateTool
 from opencda.customize.core.tools.camera_tool import CameraTool
 from opencda.customize.core.tools.lidar_tool import LiDARTool
+from opencda.customize.core.tools.radar_tool import RadarTool
 from opencda.customize.core.tools.fusion_tool import FusionTool
 from opencda.customize.core.llm_agent.llm_client import LocalHeuristicLLMClient
 from opencda.customize.core.llm_agent.prompt_builder import PromptBuilder
@@ -13,7 +14,7 @@ from opencda.customize.core.llm_agent.safety_shield import SafetyShield
 
 class LLMSensorAgent(object):
     """
-    High-level LLM Agent that calls sensor tools and decides risk/advice.
+    High-level LLM Agent that calls self-perception tools and decides risk/advice.
 
     The first runnable version uses LocalHeuristicLLMClient as an offline LLM
     substitute. The interface is designed so a real LLM client can replace it
@@ -25,6 +26,8 @@ class LLMSensorAgent(object):
         self.enabled = bool(config.get('enabled', True))
         self.debug = bool(config.get('debug', True))
         self.call_interval = int(config.get('llm_call_interval', 20))
+        self.initial_tools = config.get(
+            'initial_tools', ['camera_tool', 'lidar_tool', 'radar_tool'])
 
         thresholds = config.get('risk_threshold', {}) or {}
         self.medium_distance = float(thresholds.get('medium_distance', 60.0))
@@ -36,12 +39,15 @@ class LLMSensorAgent(object):
         lidar_config['cost'] = tool_cost.get('lidar_tool', lidar_config.get('cost', 2.0))
         camera_config = config.get('camera_tool', {}) or {}
         camera_config['cost'] = tool_cost.get('camera_tool', camera_config.get('cost', 1.0))
+        radar_config = config.get('radar_tool', {}) or {}
+        radar_config['cost'] = tool_cost.get('radar_tool', radar_config.get('cost', 1.5))
         fusion_config = config.get('fusion_tool', {}) or {}
         fusion_config['cost'] = tool_cost.get('fusion_tool', fusion_config.get('cost', 3.0))
 
         self.ego_tool = EgoStateTool(cost=tool_cost.get('ego_state_tool', 0.1))
         self.camera_tool = CameraTool(camera_config)
         self.lidar_tool = LiDARTool(lidar_config)
+        self.radar_tool = RadarTool(radar_config)
         self.fusion_tool = FusionTool(fusion_config)
 
         self.llm_client = LocalHeuristicLLMClient(
@@ -56,6 +62,15 @@ class LLMSensorAgent(object):
         self.last_called_tools = []
         self.last_total_cost = 0.0
         self.last_prompt = ''
+
+    def _run_tool_by_name(self, tool_name, context):
+        if tool_name == 'camera_tool':
+            return self.camera_tool.run(context)
+        if tool_name == 'lidar_tool':
+            return self.lidar_tool.run(context)
+        if tool_name == 'radar_tool':
+            return self.radar_tool.run(context)
+        return None
 
     def run_step(self, vehicle_manager):
         """
@@ -77,17 +92,15 @@ class LLMSensorAgent(object):
         called_tools.append('ego_state_tool')
         total_cost += ego_result.cost
 
-        # Low-cost first-stage observation.
-        camera_result = self.camera_tool.run(context)
-        tool_results['camera_tool'] = camera_result.to_dict()
-        called_tools.append('camera_tool')
-        total_cost += camera_result.cost
-
-        # LiDAR is the first real autonomous front-distance tool in this demo.
-        lidar_result = self.lidar_tool.run(context)
-        tool_results['lidar_tool'] = lidar_result.to_dict()
-        called_tools.append('lidar_tool')
-        total_cost += lidar_result.cost
+        # Run ego-mounted perception tools only. No CARLA server actor location
+        # is used in this agent decision path.
+        for tool_name in self.initial_tools:
+            result = self._run_tool_by_name(tool_name, context)
+            if result is None:
+                continue
+            tool_results[tool_name] = result.to_dict()
+            called_tools.append(tool_name)
+            total_cost += result.cost
 
         should_call_llm = (
             self.last_decision is None or
@@ -98,10 +111,12 @@ class LLMSensorAgent(object):
             prompt = PromptBuilder.build(
                 ego_state=tool_results['ego_state_tool'],
                 tool_results=tool_results,
-                available_tools=['camera_tool', 'lidar_tool', 'fusion_tool'],
+                available_tools=['camera_tool', 'lidar_tool', 'radar_tool', 'fusion_tool'],
                 constraints={
                     'avoid_full_fusion_when_low_risk': True,
                     'safety_first': True,
+                    'self_perception_only': True,
+                    'do_not_use_carla_server_actor_locations': True,
                     'do_not_output_throttle_brake_steer': True
                 })
             self.last_prompt = prompt
@@ -138,3 +153,6 @@ class LLMSensorAgent(object):
                 decision.reason))
 
         return decision
+
+    def destroy(self):
+        self.radar_tool.destroy()
