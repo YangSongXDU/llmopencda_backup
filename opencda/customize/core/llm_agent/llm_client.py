@@ -179,9 +179,9 @@ class ChatLLMClient(object):
     def __init__(self, config=None, fallback_client=None):
         config = config or {}
         self.provider = str(config.get('llm_provider', 'deepseek'))
-        self.model = str(config.get('llm_model', 'deepseek-chat'))
-        self.base_url = str(config.get(
-            'llm_base_url', 'https://api.deepseek.com/chat/completions'))
+        self.model = str(config.get('llm_model', 'deepseek-v4-flash'))
+        raw_base_url = str(config.get('llm_base_url', 'https://api.deepseek.com'))
+        self.base_url = self._normalize_chat_url(raw_base_url)
         self.api_key_env = str(config.get('api_key_env', 'DEEPSEEK_API_KEY'))
         self.timeout = float(config.get('llm_timeout', 20.0))
         self.temperature = float(config.get('temperature', 0.0))
@@ -189,6 +189,21 @@ class ChatLLMClient(object):
         self.last_backend = self.provider
         self.last_fallback_used = False
         self.last_error = ''
+
+    @staticmethod
+    def _normalize_chat_url(base_url):
+        """
+        Accept either an SDK-style base URL or a full chat-completions URL.
+
+        DeepSeek documentation calls https://api.deepseek.com the OpenAI
+        base_url, while raw urllib requests must POST to
+        /chat/completions. Normalizing here avoids HTTP 404 when users copy the
+        SDK base_url into YAML.
+        """
+        url = str(base_url).strip().rstrip('/')
+        if url.endswith('/chat/completions'):
+            return url
+        return url + '/chat/completions'
 
     def complete(self, prompt):
         self.last_backend = self.provider
