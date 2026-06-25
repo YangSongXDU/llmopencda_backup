@@ -71,28 +71,35 @@ scenario:
 
           lidar_tool:
             enabled: true
-            front_x_min: 8.0
+            # Auto checks +x and -x because raw LiDAR frame orientation may vary.
+            axis_mode: auto
+            front_x_min: 5.0
             front_x_max: 80.0
-            lane_y_abs: 1.8
-            z_min: -1.2
-            z_max: 1.5
-            min_points: 20
-            x_bin_size: 2.0
-            min_points_per_bin: 8
-            distance_percentile: 20.0
+            lane_y_abs: 2.5
+            z_min: -2.2
+            z_max: 2.0
+            min_points: 5
+            x_bin_size: 3.0
+            min_points_per_bin: 3
+            distance_percentile: 30.0
 
           radar_tool:
             enabled: true
             range: 80.0
-            horizontal_fov: 30.0
-            vertical_fov: 10.0
+            horizontal_fov: 24.0
+            vertical_fov: 8.0
             points_per_second: 1500
             position: [2.5, 0.0, 1.0, 0.0]
-            front_x_min: 3.0
+            # Ignore very near radar returns because they are often road/ego-body clutter.
+            front_x_min: 15.0
             front_x_max: 80.0
-            lane_y_abs: 2.2
-            z_abs: 3.0
-            min_points: 1
+            lane_y_abs: 1.8
+            z_abs: 2.5
+            min_points: 3
+            depth_bin_size: 4.0
+            min_points_per_bin: 3
+            max_abs_velocity: 80.0
+            min_confidence: 0.35
             ttc_max: 99.0
 
           camera_tool:
