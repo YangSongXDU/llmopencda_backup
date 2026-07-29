@@ -27,18 +27,33 @@ class SafetyShield(object):
         self.radar_critical_required_streak = 2
         self.radar_high_streak = 0
         self.radar_critical_streak = 0
+        self.last_safety_evidence = 'insufficient'
 
     def _override(self, risk, distance, advice, speed, reason, decision=None):
         maneuver = 'follow_front_vehicle'
         target_lane = 'current'
         lane_change_required = False
+        tools_to_call_next = ['fusion_tool']
+        tool_selection_reason = 'SafetyShield requests fusion for risk confirmation.'
+        uncertainty_level = 'high'
+        expected_information_gain = 'high'
+        fusion_trigger_reason = reason
+        resource_budget_level = 'high'
         if decision is not None:
             maneuver = decision.maneuver
             target_lane = decision.target_lane
             lane_change_required = decision.lane_change_required
+            tools_to_call_next = list(decision.tools_to_call_next or [])
+            if 'fusion_tool' not in tools_to_call_next:
+                tools_to_call_next.append('fusion_tool')
+            tool_selection_reason = decision.tool_selection_reason
+            uncertainty_level = decision.uncertainty_level
+            expected_information_gain = decision.expected_information_gain
+            fusion_trigger_reason = decision.fusion_trigger_reason or reason
+            resource_budget_level = decision.resource_budget_level
 
         return LLMDecision(
-            tools_to_call_next=['fusion_tool'],
+            tools_to_call_next=tools_to_call_next,
             fusion_required=True,
             risk_level=risk,
             front_vehicle_distance=distance,
@@ -47,6 +62,12 @@ class SafetyShield(object):
             maneuver=maneuver,
             target_lane=target_lane,
             lane_change_required=lane_change_required,
+            tool_selection_reason=tool_selection_reason,
+            uncertainty_level=uncertainty_level,
+            expected_information_gain=expected_information_gain,
+            fusion_trigger_reason=fusion_trigger_reason,
+            resource_budget_level=resource_budget_level,
+            safety_evidence=self.last_safety_evidence,
             reason=reason
         )
 
@@ -70,9 +91,14 @@ class SafetyShield(object):
             self.radar_critical_streak = 0
 
     def apply(self, decision, tool_results):
+        camera = tool_results.get('camera_tool', {}) or {}
         lidar = tool_results.get('lidar_tool', {}) or {}
         radar = tool_results.get('radar_tool', {}) or {}
+        fusion = tool_results.get('fusion_tool', {}) or {}
 
+        camera_available = bool(camera.get('image_available', False))
+        lidar_available = bool(lidar.get('success', False))
+        radar_available = bool(radar.get('success', False))
         lidar_detected = bool(lidar.get('front_obstacle_detected', False))
         lidar_distance = float(lidar.get('front_obstacle_distance', 999.0))
         lidar_bin_points = int(lidar.get('selected_bin_point_count', 0))
@@ -85,6 +111,20 @@ class SafetyShield(object):
         self._update_radar_streaks(
             radar_detected, radar_distance, radar_ttc, radar_conf,
             radar_bin_points)
+
+        if fusion.get('front_vehicle_detected', False):
+            self.last_safety_evidence = 'fused'
+        elif lidar_available and radar_available:
+            self.last_safety_evidence = 'lidar_radar'
+        elif lidar_available:
+            self.last_safety_evidence = 'lidar_only'
+        elif radar_available:
+            self.last_safety_evidence = 'radar_only'
+        elif camera_available:
+            self.last_safety_evidence = 'camera_only'
+        else:
+            self.last_safety_evidence = 'insufficient'
+        decision.safety_evidence = self.last_safety_evidence
 
         if lidar_detected and lidar_distance < self.critical_distance:
             return self._override(
@@ -124,5 +164,17 @@ class SafetyShield(object):
                 min(decision.target_speed_advice, 30.0),
                 'SafetyShield override: LiDAR medium-risk front distance.',
                 decision=decision)
+
+        if (self.last_safety_evidence in ['insufficient', 'camera_only'] and
+                decision.uncertainty_level == 'high'):
+            requested = list(decision.tools_to_call_next or [])
+            for tool_name in ['radar_tool', 'lidar_tool']:
+                if tool_name not in requested:
+                    requested.append(tool_name)
+            decision.tools_to_call_next = requested
+            decision.tool_selection_reason = (
+                decision.tool_selection_reason or
+                'SafetyShield requests stronger ranging tools because safety evidence is insufficient.')
+            decision.safety_evidence = self.last_safety_evidence
 
         return decision

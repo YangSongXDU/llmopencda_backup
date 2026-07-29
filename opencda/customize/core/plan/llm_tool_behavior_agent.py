@@ -19,13 +19,18 @@ class LLMToolBehaviorAgent(BehaviorAgent):
 
     This wrapper now contains a small overtaking state machine:
       KEEP_LANE -> CHANGING_LANE -> PASSING -> RETURNING -> OVERTAKE_DONE
-    The state machine converts LLM maneuvers into temporary OpenCDA routes.
+                        |             |
+                        +-> ABORTING <-+
+                <---------------- cooldown ------------------|
+    The state machine converts LLM maneuvers into temporary OpenCDA routes and
+    can repeat the cycle for successive slower vehicles.
     """
 
     KEEP_LANE = 'KEEP_LANE'
     CHANGING_LANE = 'CHANGING_LANE'
     PASSING = 'PASSING'
     RETURNING = 'RETURNING'
+    ABORTING = 'ABORTING'
     OVERTAKE_DONE = 'OVERTAKE_DONE'
 
     def __init__(self, vehicle, carla_map, config_yaml):
@@ -44,10 +49,27 @@ class LLMToolBehaviorAgent(BehaviorAgent):
         self.overtake_enabled = bool(overtake_config.get('enabled', True))
         self.overtake_lookahead = float(overtake_config.get('lookahead_distance', 45.0))
         self.return_lookahead = float(overtake_config.get('return_lookahead_distance', 45.0))
+        self.lane_route_entry_distance = float(
+            overtake_config.get('lane_route_entry_distance', 5.0))
         self.pass_distance_margin = float(overtake_config.get('pass_distance_margin', 12.0))
         self.min_passing_distance = float(overtake_config.get('min_passing_distance', 65.0))
         self.overtake_cooldown_steps = int(overtake_config.get('cooldown_steps', 80))
+        self.max_overtakes = int(overtake_config.get('max_overtakes', 1))
+        self.max_overtake_attempts = int(
+            overtake_config.get('max_overtake_attempts', 0))
+        self.min_target_lane_continuity = float(
+            overtake_config.get('min_target_lane_continuity', 0.0))
+        self.min_remaining_lane_continuity = float(
+            overtake_config.get('min_remaining_lane_continuity', 0.0))
+        self.max_lane_change_steps = int(
+            overtake_config.get('max_lane_change_steps', 180))
+        self.max_passing_steps = int(
+            overtake_config.get('max_passing_steps', 0))
+        self.max_passing_distance = float(
+            overtake_config.get('max_passing_distance', 0.0))
         self.overtake_cooldown = 0
+        self.strict_original_road_match = bool(
+            overtake_config.get('strict_original_road_match', True))
 
         self.overtake_state = self.KEEP_LANE
         self.original_lane_id = 0
@@ -57,6 +79,15 @@ class LLMToolBehaviorAgent(BehaviorAgent):
         self.overtake_start_location = None
         self.passed_front_vehicle = False
         self.return_lane_clear = False
+        self.overtake_attempt_count = 0
+        self.completed_overtake_count = 0
+        self.overtake_abort_count = 0
+        self.lane_change_steps = 0
+        self.passing_steps = 0
+        self.target_lane_continuous_distance = 999.0
+        self.target_lane_ends_or_merges_ahead = False
+        self.last_overtake_abort_reason = ''
+        self.abort_route_injected = False
         self.last_maneuver_applied = 'none'
         self.last_maneuver_reason = ''
 
@@ -127,18 +158,24 @@ class LLMToolBehaviorAgent(BehaviorAgent):
             return None
         return target_wp
 
+    def _matches_original_lane(self, waypoint):
+        if waypoint.lane_id != self.original_lane_id:
+            return False
+        if self.strict_original_road_match and \
+                waypoint.road_id != self.original_road_id:
+            return False
+        return True
+
     def _find_original_lane_waypoint(self, current_wp):
         """Find the waypoint of the original lane adjacent to current lane."""
-        if current_wp.road_id == self.original_road_id and \
-                current_wp.lane_id == self.original_lane_id:
+        if self._matches_original_lane(current_wp):
             return current_wp
 
         for candidate in [current_wp.get_left_lane(), current_wp.get_right_lane()]:
             candidate = self._validate_adjacent_lane(current_wp, candidate)
             if candidate is None:
                 continue
-            if candidate.road_id == self.original_road_id and \
-                    candidate.lane_id == self.original_lane_id:
+            if self._matches_original_lane(candidate):
                 return candidate
         return None
 
@@ -150,8 +187,7 @@ class LLMToolBehaviorAgent(BehaviorAgent):
 
     def _is_back_on_original_lane(self):
         current_wp = self._map.get_waypoint(self._ego_pos.location)
-        return current_wp.road_id == self.original_road_id and \
-            current_wp.lane_id == self.original_lane_id
+        return self._matches_original_lane(current_wp)
 
     def _lane_clear_for_original_return(self, current_wp):
         if self._is_back_on_original_lane():
@@ -207,10 +243,12 @@ class LLMToolBehaviorAgent(BehaviorAgent):
         if lane_wp is None:
             self.last_maneuver_reason = 'target lane waypoint missing'
             return False
+        entry_wps = lane_wp.next(self.lane_route_entry_distance)
+        entry_wp = entry_wps[0] if entry_wps else lane_wp
         next_wps = lane_wp.next(lookahead)
         target_wp = next_wps[0] if next_wps else lane_wp
         self.set_destination(
-            self._ego_pos.location,
+            entry_wp.transform.location,
             target_wp.transform.location,
             clean=True,
             end_reset=False)
@@ -236,22 +274,86 @@ class LLMToolBehaviorAgent(BehaviorAgent):
         except Exception:
             pass
 
+    def _reset_overtake_context(self):
+        """Clear per-cycle state before looking for the next front vehicle."""
+        self.original_lane_id = 0
+        self.original_road_id = 0
+        self.target_lane_id = 0
+        self.tracked_front_actor_id = -1
+        self.overtake_start_location = None
+        self.passed_front_vehicle = False
+        self.return_lane_clear = False
+        self.lane_change_steps = 0
+        self.passing_steps = 0
+        self.target_lane_continuous_distance = 999.0
+        self.target_lane_ends_or_merges_ahead = False
+        self.abort_route_injected = False
+
+    def _begin_abort(self, reason):
+        """Stop the current attempt and route back toward the original lane."""
+        if self.overtake_state == self.ABORTING:
+            return
+
+        self.overtake_state = self.ABORTING
+        self.overtake_abort_count += 1
+        self.last_overtake_abort_reason = reason
+        self.last_maneuver_applied = 'abort_overtake'
+        self.last_maneuver_reason = reason
+        self.abort_route_injected = False
+
+        current_wp = self._map.get_waypoint(self._ego_pos.location)
+        if self._matches_original_lane(current_wp):
+            self._restore_original_destination()
+            return
+
+        if self._lane_clear_for_original_return(current_wp):
+            original_wp = self._find_original_lane_waypoint(current_wp)
+            if original_wp is not None:
+                self.abort_route_injected = self._inject_route_to_lane(
+                    original_wp,
+                    self.return_lookahead,
+                    'abort_overtake',
+                    reason)
+                return
+
+        self._restore_original_destination()
+
     def _start_overtake_if_requested(self):
         decision = self.last_llm_decision
         if decision is None or not self.overtake_enabled:
             return
         if decision.maneuver not in ['overtake_left', 'overtake_right']:
             return
+        if self.max_overtake_attempts > 0 and \
+                self.overtake_attempt_count >= self.max_overtake_attempts:
+            self.last_maneuver_reason = (
+                'configured maximum number of overtaking attempts reached')
+            return
 
         lane = self._lane_check_data()
         if decision.maneuver == 'overtake_left':
             lane_clear = bool(lane.get('left_lane_exists', False) and
                               lane.get('left_lane_clear', False))
+            continuity = float(
+                lane.get('left_lane_continuous_distance', 999.0))
+            ends_or_merges = bool(
+                lane.get('left_lane_ends_or_merges_ahead', False))
         else:
             lane_clear = bool(lane.get('right_lane_exists', False) and
                               lane.get('right_lane_clear', False))
+            continuity = float(
+                lane.get('right_lane_continuous_distance', 999.0))
+            ends_or_merges = bool(
+                lane.get('right_lane_ends_or_merges_ahead', False))
+        self.target_lane_continuous_distance = continuity
+        self.target_lane_ends_or_merges_ahead = ends_or_merges
         if not lane_clear:
             self.last_maneuver_reason = 'target adjacent lane is not clear'
+            return
+        if continuity < self.min_target_lane_continuity:
+            self.last_maneuver_reason = (
+                'target lane continuity %.1fm is below required %.1fm' % (
+                    continuity, self.min_target_lane_continuity))
             return
 
         current_wp = self._map.get_waypoint(self._ego_pos.location)
@@ -268,6 +370,10 @@ class LLMToolBehaviorAgent(BehaviorAgent):
         self.overtake_start_location = self._ego_pos.location
         self.passed_front_vehicle = False
         self.return_lane_clear = False
+        self.lane_change_steps = 0
+        self.passing_steps = 0
+        self.last_overtake_abort_reason = ''
+        self.abort_route_injected = False
         self.overtake_state = self.CHANGING_LANE
 
         injected = self._inject_route_to_lane(
@@ -277,6 +383,9 @@ class LLMToolBehaviorAgent(BehaviorAgent):
             'overtake lane-change route injected')
         if not injected:
             self.overtake_state = self.KEEP_LANE
+            self._reset_overtake_context()
+        else:
+            self.overtake_attempt_count += 1
 
     def _run_overtake_state_machine(self):
         """Update overtaking state and inject return route when appropriate."""
@@ -290,24 +399,75 @@ class LLMToolBehaviorAgent(BehaviorAgent):
 
         current_wp = self._map.get_waypoint(self._ego_pos.location)
 
-        if self.overtake_state in [self.KEEP_LANE, self.OVERTAKE_DONE]:
-            if self.overtake_state == self.OVERTAKE_DONE:
-                self.last_maneuver_reason = 'overtake already done'
+        if self.overtake_state == self.OVERTAKE_DONE:
+            if self.max_overtakes > 0 and \
+                    self.completed_overtake_count >= self.max_overtakes:
+                self.last_maneuver_reason = (
+                    'configured maximum number of overtakes reached')
                 return
+            if self.overtake_cooldown > 0:
+                self.overtake_cooldown -= 1
+                self.last_maneuver_reason = (
+                    'overtake cooldown before searching for next vehicle')
+                return
+
+            self._reset_overtake_context()
+            self.overtake_state = self.KEEP_LANE
+            self.last_maneuver_reason = 'ready for next overtaking cycle'
+            return
+
+        if self.overtake_state == self.KEEP_LANE:
             self._start_overtake_if_requested()
             return
 
         if self.overtake_state == self.CHANGING_LANE:
+            self.lane_change_steps += 1
+            if self.last_llm_decision is not None and \
+                    self.last_llm_decision.maneuver == 'abort_overtake':
+                self._begin_abort('LLM requested abort during lane change')
+                return
+            if self.max_lane_change_steps > 0 and \
+                    self.lane_change_steps > self.max_lane_change_steps:
+                self._begin_abort('lane change exceeded configured step limit')
+                return
             if current_wp.lane_id == self.target_lane_id:
                 self.overtake_state = self.PASSING
+                self.passing_steps = 0
                 self.last_maneuver_reason = 'lane change completed; passing front vehicle'
             else:
                 self.last_maneuver_reason = 'changing lane toward overtake lane'
             return
 
         if self.overtake_state == self.PASSING:
+            self.passing_steps += 1
             self.passed_front_vehicle = self._has_passed_tracked_front_vehicle()
             if not self.passed_front_vehicle:
+                if self.last_llm_decision is not None and \
+                        self.last_llm_decision.maneuver == 'abort_overtake':
+                    self._begin_abort('LLM requested abort while passing')
+                    return
+                if current_wp.lane_id != self.target_lane_id:
+                    self._begin_abort(
+                        'ego left target lane before passing tracked vehicle')
+                    return
+                lane = self._lane_check_data()
+                remaining = float(lane.get(
+                    'current_lane_continuous_distance', 999.0))
+                if remaining < self.min_remaining_lane_continuity:
+                    self._begin_abort(
+                        'target lane ends or merges in %.1fm while passing' %
+                        remaining)
+                    return
+                if self.max_passing_steps > 0 and \
+                        self.passing_steps > self.max_passing_steps:
+                    self._begin_abort('passing exceeded configured step limit')
+                    return
+                if self.max_passing_distance > 0.0 and \
+                        self._distance_from_overtake_start() > \
+                        self.max_passing_distance:
+                    self._begin_abort(
+                        'passing exceeded configured distance limit')
+                    return
                 self.last_maneuver_reason = 'passing; front vehicle not safely behind yet'
                 return
 
@@ -329,11 +489,40 @@ class LLMToolBehaviorAgent(BehaviorAgent):
                 'return-to-original-lane route injected')
             return
 
+        if self.overtake_state == self.ABORTING:
+            if self._is_back_on_original_lane():
+                self.overtake_state = self.OVERTAKE_DONE
+                self.overtake_cooldown = max(
+                    0, self.overtake_cooldown_steps)
+                self.last_maneuver_applied = 'overtake_aborted'
+                self.last_maneuver_reason = (
+                    'aborted overtaking attempt returned to original lane')
+                self._restore_original_destination()
+                return
+
+            if not self.abort_route_injected and \
+                    self._lane_clear_for_original_return(current_wp):
+                original_wp = self._find_original_lane_waypoint(current_wp)
+                if original_wp is not None:
+                    self.abort_route_injected = self._inject_route_to_lane(
+                        original_wp,
+                        self.return_lookahead,
+                        'abort_overtake',
+                        self.last_overtake_abort_reason)
+            self.last_maneuver_reason = (
+                self.last_overtake_abort_reason or
+                'aborting overtaking attempt')
+            return
+
         if self.overtake_state == self.RETURNING:
             if self._is_back_on_original_lane():
                 self.overtake_state = self.OVERTAKE_DONE
+                self.completed_overtake_count += 1
+                self.overtake_cooldown = max(0, self.overtake_cooldown_steps)
                 self.last_maneuver_applied = 'overtake_done'
-                self.last_maneuver_reason = 'ego returned to original lane; original destination restored'
+                self.last_maneuver_reason = (
+                    'ego returned to original lane; overtaking cycle completed '
+                    'and original destination restored')
                 self._restore_original_destination()
             else:
                 self.last_maneuver_reason = 'returning to original lane'

@@ -32,6 +32,8 @@ class FrontVehicleDebugTool(SensorToolBase):
         self.max_distance = float(config.get('max_distance', 120.0))
         self.lane_y_abs = float(config.get('lane_y_abs', 2.5))
         self.same_lane_only = bool(config.get('same_lane_only', True))
+        self.allow_cross_road_same_lane = bool(
+            config.get('allow_cross_road_same_lane', False))
 
     @staticmethod
     def _longitudinal_lateral(ego_transform, target_location):
@@ -77,9 +79,9 @@ class FrontVehicleDebugTool(SensorToolBase):
                 continue
 
             actor_wp = carla_map.get_waypoint(loc)
-            same_lane = (
-                actor_wp.road_id == ego_wp.road_id and
-                actor_wp.lane_id == ego_wp.lane_id)
+            same_lane = actor_wp.lane_id == ego_wp.lane_id and (
+                actor_wp.road_id == ego_wp.road_id or
+                self.allow_cross_road_same_lane)
             if self.same_lane_only and not same_lane:
                 continue
 

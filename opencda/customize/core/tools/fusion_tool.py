@@ -44,12 +44,18 @@ class FusionTool(SensorToolBase):
         camera_available = bool(camera.get('image_available', False))
         camera_possible = bool(camera.get('possible_front_vehicle', False))
         camera_conf = float(camera.get('confidence', 0.0))
+        fusion_trigger_reason = context.get('fusion_trigger_reason', '')
 
         distance_candidates = []
+        input_modalities = []
         if lidar_detected:
             distance_candidates.append(('lidar', lidar_distance, max(lidar_conf, 0.01)))
+            input_modalities.append('lidar')
         if radar_detected:
             distance_candidates.append(('radar', radar_distance, max(radar_conf, 0.01)))
+            input_modalities.append('radar')
+        if camera_available:
+            input_modalities.append('camera')
 
         detected = len(distance_candidates) > 0
         if detected:
@@ -73,6 +79,8 @@ class FusionTool(SensorToolBase):
 
         if camera_available and camera_possible and detected:
             confidence = min(1.0, confidence + 0.05 * max(camera_conf, 0.1))
+        distance_conflict = bool(lidar_detected and radar_detected and
+                                 gap > self.max_lidar_radar_distance_gap)
 
         return ToolResult(
             self.tool_name,
@@ -87,7 +95,11 @@ class FusionTool(SensorToolBase):
                 'lidar_used': lidar_detected,
                 'radar_used': radar_detected,
                 'camera_confirmed': camera_available and camera_possible,
-                'lidar_radar_distance_gap': gap
+                'lidar_radar_distance_gap': gap,
+                'input_modalities': '|'.join(input_modalities),
+                'modality_count': len(input_modalities),
+                'distance_conflict': distance_conflict,
+                'fusion_trigger_reason': fusion_trigger_reason
             },
             cost=self.cost,
             reason='Fused ego-camera, ego-LiDAR and ego-radar structured summaries.'

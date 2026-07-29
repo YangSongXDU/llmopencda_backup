@@ -149,3 +149,12 @@ docs/tmp.py
 video_dumping
 *data_dumping*
 ready*
+
+# Local manuscript materials are intentionally kept outside the code release.
+PAPER/
+Autonomous_Driving_Paper_Handoff/
+
+# Local experiment artifacts and machine-specific configuration backups.
+opencda_output/
+results/
+*.local_backup

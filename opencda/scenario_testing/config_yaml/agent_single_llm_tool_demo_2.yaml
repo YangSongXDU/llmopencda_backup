@@ -1,0 +1,259 @@
+description: |-
+  Town06 multi-lane traffic scenario for the LLM Agent sensor-as-tools
+  framework. Four separated slower vehicles create repeatable overtaking
+  cycles, while two neighboring lanes carry mixed-speed background traffic.
+  The ego vehicle must continue selecting Camera/LiDAR/Radar/FusionTool as the
+  traffic context changes and still reach a long-range destination.
+
+world:
+  seed: 23
+  weather:
+    sun_altitude_angle: 35
+    cloudiness: 10
+    precipitation: 0
+    precipitation_deposits: 0
+    wind_intensity: 0
+    fog_density: 0
+    fog_distance: 0
+    fog_falloff: 0
+    wetness: 0
+
+carla_traffic_manager:
+  global_distance: 7.0
+  global_speed_perc: 15
+  auto_lane_change: false
+  random: true
+  ignore_lights_percentage: 0
+  vehicle_list:
+    # Four slower vehicles in ego's original lane create four separated,
+    # repeatable overtaking opportunities along the route.
+    - spawn_position: [55.7194, 143.63, 0.3, 0, 0, 0]
+      vehicle_speed_perc: 75
+    - spawn_position: [170.7194, 144.10, 0.3, 0, 0, 0]
+      vehicle_speed_perc: 70
+    - spawn_position: [285.7194, 144.58, 0.3, 0, 0, 0]
+      vehicle_speed_perc: 80
+    - spawn_position: [400.7194, 145.05, 0.3, 0, 0, 0]
+      vehicle_speed_perc: 90
+
+    # Faster traffic in the immediately adjacent lane preserves usable passing
+    # gaps instead of trapping ego behind another slow vehicle after it moves
+    # left. The unequal positions still vary LiDAR/radar observations.
+    - spawn_position: [105.7194, 139.84, 0.3, 0, 0, 0]
+      vehicle_speed_perc: -15
+    - spawn_position: [225.7194, 140.33, 0.3, 0, 0, 0]
+      vehicle_speed_perc: -5
+    - spawn_position: [345.7194, 140.82, 0.3, 0, 0, 0]
+      vehicle_speed_perc: -20
+    - spawn_position: [465.7194, 141.31, 0.3, 0, 0, 0]
+      vehicle_speed_perc: -10
+
+    # Mixed-speed traffic in the outer lane increases scene density and sensor
+    # clutter without occupying the lane used for the return maneuver.
+    - spawn_position: [75.7194, 136.72, 0.3, 0, 0, 0]
+      vehicle_speed_perc: 5
+    - spawn_position: [145.7194, 137.00, 0.3, 0, 0, 0]
+      vehicle_speed_perc: 30
+    - spawn_position: [215.7194, 137.29, 0.3, 0, 0, 0]
+      vehicle_speed_perc: -10
+    - spawn_position: [290.7194, 137.60, 0.3, 0, 0, 0]
+      vehicle_speed_perc: 40
+    - spawn_position: [365.7194, 137.90, 0.3, 0, 0, 0]
+      vehicle_speed_perc: -20
+    - spawn_position: [445.7194, 138.23, 0.3, 0, 0, 0]
+      vehicle_speed_perc: 10
+
+scenario:
+  max_steps: 2400
+  min_run_steps: 120
+  goal_radius: 12.0
+  resource_monitor:
+    enabled: true
+    sample_gpu: true
+    gpu_index: 0
+    gpu_sample_interval_steps: 20
+  postprocess:
+    enabled: true
+    output_dir: results/agent_single_llm_tool_demo_2
+
+  single_cav_list:
+    - name: cav1
+      spawn_position: [25.7194, 143.51, 0.3, 0, 0, 0]
+      destination: [620.0, 145.39, 0.3]
+
+      sensing:
+        perception:
+          activate: false
+          camera:
+            visualize: 1
+            num: 1
+            positions:
+              - [2.5, 0, 1.0, 0]
+          lidar:
+            visualize: true
+            range: 90
+            channels: 32
+            points_per_second: 120000
+            rotation_frequency: 20
+            upper_fov: 10.0
+            lower_fov: -30.0
+            dropoff_general_rate: 0.0
+            dropoff_intensity_limit: 1.0
+            dropoff_zero_intensity: 0.0
+            noise_stddev: 0.0
+
+      behavior:
+        use_llm_tool_agent: true
+        self_perception_only: true
+        max_speed: 85
+        tailgate_speed: 95
+        ignore_traffic_light: true
+        overtake_allowed: true
+        local_planner:
+          debug_trajectory: true
+          debug: false
+
+        llm_overtake:
+          enabled: true
+          lookahead_distance: 42.0
+          return_lookahead_distance: 55.0
+          lane_route_entry_distance: 5.0
+          pass_distance_margin: 14.0
+          min_passing_distance: 70.0
+          cooldown_steps: 30
+          max_overtakes: 4
+          max_overtake_attempts: 6
+          min_target_lane_continuity: 90.0
+          min_remaining_lane_continuity: 35.0
+          max_lane_change_steps: 180
+          max_passing_steps: 360
+          max_passing_distance: 130.0
+          strict_original_road_match: false
+
+        llm_sensor_agent:
+          enabled: true
+          debug: true
+          llm_call_interval: 20
+          initial_tools: [camera_tool]
+
+          tool_selection:
+            enabled: true
+            strategy: llm
+            base_tools: [camera_tool]
+            selectable_tools: [radar_tool, lidar_tool, fusion_tool]
+            max_tools_per_step: 3
+            cost_budget_per_step: 6.5
+            allow_cached_results: true
+            avoid_full_fusion_when_low_risk: true
+            tool_cache:
+              camera_tool:
+                ttl_steps: 1
+              radar_tool:
+                ttl_steps: 2
+              lidar_tool:
+                ttl_steps: 5
+              fusion_tool:
+                ttl_steps: 5
+
+          prototype_oracle_tools:
+            enabled: true
+            tools: [front_vehicle_debug_tool, lane_check_tool]
+            expose_to_decision: true
+            count_toward_resource_metrics: false
+
+          llm_provider: deepseek
+          llm_model: deepseek-v4-flash
+          llm_base_url: https://api.deepseek.com
+
+
+          # llm_provider: openai
+          # llm_model: qwen2.5:14b
+          # llm_base_url: http://YOUR_LLM_HOST:PORT/v1
+
+          api_key_env: DEEPSEEK_API_KEY
+          llm_mode: robust_demo
+          llm_allow_fallback: true
+          llm_timeout: 30.0
+          llm_max_retries: 2
+          llm_retry_backoff: 0.35
+          llm_circuit_breaker_failures: 2
+          llm_circuit_breaker_cooldown_calls: 5
+          llm_preflight_enabled: true
+          temperature: 0.0
+
+          risk_threshold:
+            medium_distance: 70.0
+            high_distance: 35.0
+            critical_distance: 12.0
+
+          tool_cost:
+            ego_state_tool: 0.1
+            camera_tool: 1.0
+            lidar_tool: 2.0
+            radar_tool: 1.5
+            front_vehicle_debug_tool: 0.2
+            lane_check_tool: 0.5
+            fusion_tool: 3.0
+
+          front_vehicle_debug_tool:
+            enabled: true
+            max_distance: 130.0
+            lane_y_abs: 2.5
+            same_lane_only: true
+            allow_cross_road_same_lane: true
+
+          lane_check_tool:
+            enabled: true
+            safe_front_distance: 28.0
+            safe_rear_distance: 14.0
+            check_distance: 75.0
+            continuity_check_distance: 100.0
+            continuity_sample_distance: 5.0
+            min_overtake_continuity: 90.0
+            allow_cross_road_lane_match: true
+
+          lidar_tool:
+            enabled: true
+            axis_mode: auto
+            front_x_min: 10.0
+            front_x_max: 90.0
+            lane_y_abs: 2.5
+            z_min: -1.2
+            z_max: 2.0
+            min_points: 5
+            x_bin_size: 4.0
+            min_points_per_bin: 5
+            distance_percentile: 40.0
+
+          radar_tool:
+            enabled: true
+            range: 90.0
+            horizontal_fov: 26.0
+            vertical_fov: 8.0
+            points_per_second: 1800
+            position: [2.5, 0.0, 1.0, 0.0]
+            front_x_min: 12.0
+            front_x_max: 90.0
+            lane_y_abs: 1.8
+            z_abs: 2.5
+            min_points: 3
+            depth_bin_size: 4.0
+            min_points_per_bin: 3
+            max_abs_velocity: 80.0
+            min_confidence: 0.35
+            ttc_max: 99.0
+
+          camera_tool:
+            enabled: true
+            front_roi: [0.30, 0.45, 0.70, 0.85]
+            edge_threshold: 35.0
+            edge_density_threshold: 0.035
+            dark_ratio_threshold: 0.08
+            dark_pixel_threshold: 80.0
+
+          fusion_tool:
+            enabled: true
+            max_lidar_radar_distance_gap: 10.0
+
+      v2x:
+        communication_range: 45

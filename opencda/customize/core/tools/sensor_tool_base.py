@@ -13,19 +13,26 @@ class ToolResult(object):
     Lightweight result object returned by every sensor tool.
     """
 
-    def __init__(self, tool_name, success=True, data=None, cost=0.0, reason=''):
+    def __init__(self, tool_name, success=True, data=None, cost=0.0, reason='',
+                 runtime_ms=0.0, from_cache=False, fresh=True):
         self.tool_name = tool_name
         self.success = success
         self.data = data if data is not None else {}
         self.cost = float(cost)
         self.reason = reason
+        self.runtime_ms = float(runtime_ms)
+        self.from_cache = bool(from_cache)
+        self.fresh = bool(fresh)
 
     def to_dict(self):
         result = {
             'tool_name': self.tool_name,
             'success': self.success,
             'cost': self.cost,
-            'reason': self.reason
+            'reason': self.reason,
+            'runtime_ms': self.runtime_ms,
+            'from_cache': self.from_cache,
+            'fresh': self.fresh
         }
         result.update(self.data)
         return result
@@ -52,3 +59,13 @@ class SensorToolBase(object):
             cost=0.0,
             reason='Tool disabled.'
         )
+
+    def get_metadata(self):
+        return {
+            'tool_name': self.tool_name,
+            'cost': self.cost,
+            'enabled': self.enabled,
+            'modality': 'unknown',
+            'best_for': '',
+            'limitations': ''
+        }

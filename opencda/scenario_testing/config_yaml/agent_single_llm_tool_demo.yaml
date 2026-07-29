@@ -68,15 +68,42 @@ scenario:
           # For real API tests, 20 is cheaper and less likely to block CARLA.
           # For local deterministic tests, 5 is also acceptable.
           llm_call_interval: 20
-          # For the first overtaking prototype, debug front/lane tools are
-          # enabled. They make the front-car distance visible in logs/CSV and
-          # allow a robust overtake_left/right decision.
-          initial_tools: [camera_tool, lidar_tool, radar_tool, front_vehicle_debug_tool, lane_check_tool]
+          # In the resource-aware Agent setting, initial_tools is kept as a
+          # backward-compatible fallback. The actual proposed path uses
+          # tool_selection.base_tools and lets the Agent request stronger tools.
+          initial_tools: [camera_tool]
+
+          tool_selection:
+            enabled: true
+            # llm: real/fallback LLM decides tools; rule: deterministic baseline;
+            # always_all: high-cost baseline that calls every selectable tool.
+            strategy: llm
+            base_tools: [camera_tool]
+            selectable_tools: [radar_tool, lidar_tool, fusion_tool]
+            max_tools_per_step: 3
+            cost_budget_per_step: 6.5
+            allow_cached_results: true
+            avoid_full_fusion_when_low_risk: true
+            tool_cache:
+              camera_tool:
+                ttl_steps: 1
+              radar_tool:
+                ttl_steps: 2
+              lidar_tool:
+                ttl_steps: 5
+              fusion_tool:
+                ttl_steps: 5
+
+          # Prototype/oracle tools use CARLA actor/map truth for closed-loop
+          # validation. Disable them for strict self-perception experiments.
+          prototype_oracle_tools:
+            enabled: true
+            tools: [front_vehicle_debug_tool, lane_check_tool]
 
           # llm_provider: local uses deterministic heuristic logic.
           # To call a real DeepSeek-compatible LLM, set llm_provider: deepseek
           # and export DEEPSEEK_API_KEY in your shell before running.
-          llm_provider: local
+          llm_provider: deepseek
           llm_model: deepseek-v4-flash
           # This can be either SDK-style base URL or full chat endpoint. The
           # client normalizes both into /chat/completions.
